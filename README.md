@@ -31,8 +31,8 @@ pushes anything outstanding and then pulls whatever another machine wrote.
 index.html   markup, inline SVG icon sprite, pre-paint theme bootstrap
 style.css    design tokens + layout; dark mode is token overrides only
 config.js    gist id, filenames, limits, the sealed token
-crypto.js    passkey → PAT (PBKDF2-SHA256 + AES-GCM, via Web Crypto)
-store.js     gist read/write: debounce, write queue, error translation
+store.js     gist read/write: unsealing the PAT, debounce, write queue,
+             error translation
 app.js       notes, files, tabs, modals, rendering
 tools/seal.py   re-seals a new PAT against the passkey
 ```

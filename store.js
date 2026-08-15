@@ -10,6 +10,10 @@
    into one request, and only ever one request is in flight at a time —
    two overlapping PATCHes to the same gist can land out of order and
    silently undo each other.
+
+   Getting the credential to talk to that gist is the other half of this
+   file: unsealing the PAT is the first step of every session, and this
+   is the only place that needs it.
    ============================================================ */
 
 (function () {
@@ -33,6 +37,46 @@
 
     /* ---------- token ---------------------------------------------- */
 
+    /* Undoes what tools/seal.py did. The sealed blob is laid out as
+           salt(16) || iv(12) || AES-GCM ciphertext(+16 byte tag)
+       base64'd, with the AES key derived by PBKDF2-SHA256 over the
+       passkey. Both sides have to agree on the iteration count, which is
+       why it lives in config.js instead of being written out twice. */
+
+    function b64ToBytes(b64) {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    }
+
+    async function deriveKey(passkey, salt, iterations) {
+        const material = await crypto.subtle.importKey(
+            'raw', new TextEncoder().encode(passkey), 'PBKDF2', false, ['deriveKey']
+        );
+        return crypto.subtle.deriveKey(
+            { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+            material,
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['decrypt']
+        );
+    }
+
+    /* Throws if the passkey is wrong or the blob is malformed — AES-GCM
+       authenticates, so a bad key fails loudly instead of handing back
+       plausible garbage. */
+    async function unseal(sealedB64, passkey, iterations) {
+        const blob = b64ToBytes(sealedB64);
+        if (blob.length < 16 + 12 + 16) throw new Error('Sealed token is truncated.');
+
+        const key = await deriveKey(passkey, blob.slice(0, 16), iterations);
+        const plain = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: blob.slice(16, 28) }, key, blob.slice(28)
+        );
+        return new TextDecoder().decode(plain);
+    }
+
     /** A token pasted into Settings wins over the sealed one, so a
      *  re-scoped or rotated PAT can be dropped in without a redeploy. */
     function tokenOverride() {
@@ -51,9 +95,7 @@
     async function unlock(passkey) {
         const override = tokenOverride();
         if (override) { token = override; return; }
-        token = await window.DocketCrypto.unseal(
-            CFG.SEALED_TOKEN, passkey, CFG.KDF_ITERATIONS
-        );
+        token = await unseal(CFG.SEALED_TOKEN, passkey, CFG.KDF_ITERATIONS);
     }
 
     const headers = () => ({
