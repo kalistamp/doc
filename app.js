@@ -245,7 +245,7 @@
                 <input class="note-title" type="text" value="${esc(n.title || '')}"
                        placeholder="Untitled" maxlength="120" aria-label="Note title">
                 <textarea class="note-body" placeholder="Start typing…"
-                          aria-label="Note body">${esc(n.body || '')}</textarea>
+                          aria-label="Note body"></textarea>
                 <div class="note-foot">
                     <span class="note-stamp">${esc(relTime(n.updated))}</span>
                     <button class="note-act act-pin${n.pinned ? ' is-on' : ''}" type="button"
@@ -260,7 +260,14 @@
                 </div>
             </article>`).join('');
 
-        grid.querySelectorAll('.note-body').forEach(autosize);
+        /* Bodies are assigned, not interpolated into the markup. The HTML
+           parser drops a leading newline inside <textarea>, so a note that
+           opens with a blank line would lose it on every re-render — and
+           this grid re-renders on pin, search, delete and sync. */
+        grid.querySelectorAll('.note-body').forEach((ta, i) => {
+            ta.value = list[i].body || '';
+            autosize(ta);
+        });
 
         if (list.length === 0 && notes.length > 0) {
             grid.innerHTML = `<p class="hint" style="grid-column:1/-1">
