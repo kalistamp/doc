@@ -385,12 +385,27 @@
                 toast(`No room for ${file.name} — the gist is nearly full`);
                 continue;
             }
+            /* Read first, register second. The other order leaves a row in
+               `files` with no matching blob if the read fails — a listing
+               that can only ever say "missing its contents". */
+            let payload;
             try {
-                blobs[await addFile(file)] = await readBase64(file);
-                added++;
+                payload = await readBase64(file);
             } catch (err) {
                 toast(`Could not read ${file.name}`);
+                continue;
             }
+
+            const id = uid();
+            blobs[id] = payload;
+            files.unshift({
+                id,
+                name: file.name,
+                size: file.size,
+                type: file.type || 'application/octet-stream',
+                added: new Date().toISOString()
+            });
+            added++;
         }
 
         if (!added) return;
@@ -398,18 +413,6 @@
         Store.touchData();
         Store.touchBlobs();
         toast(`${added} file${added === 1 ? '' : 's'} uploaded`);
-    }
-
-    function addFile(file) {
-        const id = uid();
-        files.unshift({
-            id,
-            name: file.name,
-            size: file.size,
-            type: file.type || 'application/octet-stream',
-            added: new Date().toISOString()
-        });
-        return Promise.resolve(id);
     }
 
     /* readAsDataURL hands back "data:<mime>;base64,<payload>"; only the

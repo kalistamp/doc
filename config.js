@@ -33,6 +33,10 @@ window.DOCKET_CONFIG = {
     /* Quiet period after typing before a save fires, in ms. */
     SAVE_DEBOUNCE_MS: 900,
 
+    /* Ceiling on how long an unsaved change may sit, in ms. Without it,
+       steady typing resets the debounce forever and nothing is ever saved. */
+    MAX_SAVE_WAIT_MS: 5000,
+
     /* PBKDF2 rounds used to derive the token key. Must match the sealer. */
     KDF_ITERATIONS: 250000,
 

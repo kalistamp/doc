@@ -27,6 +27,7 @@
     let flushTimer = null;
     let inFlight = null;
     let lastError = null;
+    let dirtySince = 0;   /* when the oldest unsaved change arrived */
 
     const emit = (state, detail) => listeners.forEach((fn) => fn(state, detail));
 
@@ -67,12 +68,17 @@
        personal access token") tells you nothing about how to fix it, and
        this is the single most likely thing to go wrong with a fine-grained
        PAT, so it gets translated. */
-    function describe(res, body) {
+    function describe(res, body, verb) {
         if (res.status === 401) {
             return 'GitHub rejected the token (401). It may have been revoked or expired — paste a fresh one in Settings.';
         }
-        if (res.status === 403 || res.status === 404) {
-            return 'The token cannot write this gist (' + res.status + '). Give it Account permissions → Gists → Read and write, then reload.';
+        if (res.status === 403) {
+            return `The token is not allowed to ${verb} this gist (403). Give it Account permissions → Gists → Read and write, then reload.`;
+        }
+        if (res.status === 404) {
+            return verb === 'read'
+                ? 'No gist found at that id (404) — check GIST_ID, or the token may not be allowed to see it.'
+                : 'Cannot write this gist (404). Usually the token lacks Gists → Read and write.';
         }
         if (res.status === 422) {
             return 'GitHub refused the payload (422) — usually a file over the size limit.';
@@ -112,7 +118,7 @@
         });
         if (!res.ok) {
             const body = await readBody(res);
-            const err = new Error(describe(res, body));
+            const err = new Error(describe(res, body, 'read'));
             lastError = err.message;
             emit('error', err.message);
             throw err;
@@ -144,10 +150,17 @@
         sources = { data: dataSource, blobs: blobSource };
     }
 
+    /* Plain debouncing starves: someone typing steadily resets the timer on
+       every keystroke and nothing ever reaches the gist. The ceiling makes
+       the wait bounded — quiet typing still coalesces into one PATCH, but a
+       long unbroken run gets checkpointed every MAX_SAVE_WAIT_MS. */
     function touch(which) {
         dirty[which] = true;
         emit('dirty');
+        if (!dirtySince) dirtySince = Date.now();
+
         clearTimeout(flushTimer);
+        if (Date.now() - dirtySince >= CFG.MAX_SAVE_WAIT_MS) { flush(); return; }
         flushTimer = setTimeout(flush, CFG.SAVE_DEBOUNCE_MS);
     }
 
@@ -162,6 +175,7 @@
         const sending = { data: dirty.data, blobs: dirty.blobs };
         dirty.data = false;
         dirty.blobs = false;
+        dirtySince = 0;
 
         const payload = {};
         if (sending.data) {
@@ -182,7 +196,7 @@
                    next edit (or Retry) should carry it up again. */
                 dirty.data = dirty.data || sending.data;
                 dirty.blobs = dirty.blobs || sending.blobs;
-                throw new Error(describe(res, await readBody(res)));
+                throw new Error(describe(res, await readBody(res), 'write'));
             }
         })();
 
