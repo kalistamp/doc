@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="A private docket for notes and files, synced across every machine.">
+<title>Docket Sharing</title>
+
+<!-- Theme bootstrap. Runs before the stylesheet paints so a dark-mode
+     visitor never gets a white flash. app.js owns the toggle; this is a
+     deliberate duplicate of just enough logic to beat first paint. -->
+<script>
+(function () {
+    try {
+        var saved = localStorage.getItem('docket.theme');
+        var dark = saved ? saved === 'dark'
+            : window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) document.documentElement.classList.add('theme-dark');
+    } catch (e) {}
+})();
+</script>
+
+<link rel="stylesheet" href="./style.css?v=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
+</head>
+<body>
+
+<!-- ============================================================
+     ICON SPRITE — inline so there is no icon-font CDN to wait on
+     (and no flash of un-iconed buttons on a cold load).
+     ============================================================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+        <symbol id="i-lock" viewBox="0 0 24 24"><path d="M17 10V8a5 5 0 0 0-10 0v2M6 10h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/></symbol>
+        <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM8 9h8M8 13h8M8 17h4"/></symbol>
+        <symbol id="i-file" viewBox="0 0 24 24"><path d="M13 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8l-5-5Z"/><path d="M13 3v5h5"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/></symbol>
+        <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"/></symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 19V8m0 0 4 4m-4-4-4 4M5 5h14"/></symbol>
+        <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+        <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></symbol>
+        <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H2a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H8a1.6 1.6 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V8a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></symbol>
+        <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.5M4 5v3.5H7.5"/><path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.5M20 19v-3.5h-3.5"/></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></symbol>
+        <symbol id="i-signout" viewBox="0 0 24 24"><path d="M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 8l-4 4 4 4M6 12h10"/></symbol>
+        <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
+        <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6ZM12 15v5"/></symbol>
+    </defs>
+</svg>
+
+<!-- ============================================================
+     PASSKEY GATE
+     ============================================================ -->
+<div id="gate" class="gate">
+    <div class="gate-card">
+        <div class="gate-mark" aria-hidden="true">
+            <svg class="ico"><use href="#i-lock"></use></svg>
+        </div>
+        <h1>Docket <em>Sharing</em></h1>
+        <p class="gate-sub">Your notes and files, on every machine.</p>
+
+        <form id="gate-form" autocomplete="off">
+            <label class="sr-only" for="passkey">Passkey</label>
+            <input type="password" id="passkey" placeholder="Passkey"
+                   autocomplete="current-password" spellcheck="false" autofocus>
+            <button type="submit" class="btn btn-primary btn-block" id="gate-btn">Unlock</button>
+        </form>
+        <p id="gate-msg" class="gate-msg" role="status" aria-live="polite"></p>
+    </div>
+    <p class="gate-foot">Docket Sharing</p>
+</div>
+
+<!-- ============================================================
+     APP
+     ============================================================ -->
+<div id="app" hidden>
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark" aria-hidden="true"><svg class="ico"><use href="#i-note"></use></svg></span>
+            <h1>Docket <em>Sharing</em></h1>
+        </div>
+
+        <div class="topbar-right">
+            <button id="sync-pill" class="sync-pill" type="button" title="Sync now">
+                <svg class="ico"><use href="#i-check"></use></svg>
+                <span id="sync-text">Synced</span>
+            </button>
+            <button id="theme-btn" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+                <svg class="ico ico-sun"><use href="#i-sun"></use></svg>
+                <svg class="ico ico-moon"><use href="#i-moon"></use></svg>
+            </button>
+            <button id="settings-btn" class="icon-btn" type="button" title="Settings" aria-label="Settings">
+                <svg class="ico"><use href="#i-gear"></use></svg>
+            </button>
+            <button id="lock-btn" class="icon-btn" type="button" title="Lock" aria-label="Lock">
+                <svg class="ico"><use href="#i-signout"></use></svg>
+            </button>
+        </div>
+    </header>
+
+    <div id="banner" class="banner" hidden>
+        <svg class="ico"><use href="#i-alert"></use></svg>
+        <span id="banner-text"></span>
+        <button id="banner-retry" class="btn btn-ghost btn-sm" type="button">Retry</button>
+        <button id="banner-close" class="banner-x" type="button" aria-label="Dismiss">&times;</button>
+    </div>
+
+    <nav class="tabs" role="tablist">
+        <button class="tab is-active" data-tab="notes" role="tab" aria-selected="true">
+            <svg class="ico"><use href="#i-note"></use></svg>
+            Notes <span class="tab-count" id="count-notes">0</span>
+        </button>
+        <button class="tab" data-tab="files" role="tab" aria-selected="false">
+            <svg class="ico"><use href="#i-file"></use></svg>
+            Files <span class="tab-count" id="count-files">0</span>
+        </button>
+    </nav>
+
+    <main>
+        <!-- ---------------- NOTES ---------------- -->
+        <section id="panel-notes" class="panel is-active" role="tabpanel">
+            <div class="panel-bar">
+                <div class="search">
+                    <svg class="ico"><use href="#i-search"></use></svg>
+                    <input type="search" id="note-search" placeholder="Search notes…" spellcheck="false">
+                </div>
+                <button id="new-note-btn" class="btn btn-primary" type="button">
+                    <svg class="ico"><use href="#i-plus"></use></svg> New note
+                </button>
+            </div>
+
+            <div id="note-grid" class="note-grid"></div>
+
+            <div id="notes-empty" class="empty" hidden>
+                <svg class="ico ico-lg"><use href="#i-note"></use></svg>
+                <h3>No notes yet</h3>
+                <p>Every note you make here shows up on your other machines the next time you unlock.</p>
+                <button class="btn btn-primary" type="button" data-act="new-note">
+                    <svg class="ico"><use href="#i-plus"></use></svg> Write the first one
+                </button>
+            </div>
+        </section>
+
+        <!-- ---------------- FILES ---------------- -->
+        <section id="panel-files" class="panel" role="tabpanel">
+            <div class="panel-bar">
+                <div class="search">
+                    <svg class="ico"><use href="#i-search"></use></svg>
+                    <input type="search" id="file-search" placeholder="Search files…" spellcheck="false">
+                </div>
+                <button id="upload-btn" class="btn btn-primary" type="button">
+                    <svg class="ico"><use href="#i-upload"></use></svg> Upload
+                </button>
+                <input type="file" id="file-input" multiple hidden>
+            </div>
+
+            <div id="dropzone" class="dropzone">
+                <svg class="ico ico-lg"><use href="#i-upload"></use></svg>
+                <p><strong>Drop files here</strong> or <button class="linkish" type="button" data-act="upload">browse</button></p>
+                <p class="hint" id="dropzone-hint">Up to 2 MB each</p>
+            </div>
+
+            <ul id="file-list" class="file-list"></ul>
+
+            <div class="storage-bar">
+                <div class="storage-track"><div id="storage-fill" class="storage-fill"></div></div>
+                <span id="storage-text" class="storage-text">0 B stored</span>
+            </div>
+        </section>
+    </main>
+
+    <footer class="foot">
+        <span>Backed by a private gist · <span id="foot-stamp">—</span></span>
+    </footer>
+</div>
+
+<!-- ============================================================
+     MODALS
+     ============================================================ -->
+<div id="settings-modal" class="modal" hidden>
+    <div class="modal-card">
+        <h2>Settings</h2>
+
+        <div class="field">
+            <label for="token-input">GitHub token</label>
+            <input type="password" id="token-input" placeholder="Leave blank to use the built-in token"
+                   spellcheck="false" autocomplete="off">
+            <p class="hint">Overrides the token baked into this build and is kept on this
+               machine only. Use it to swap in a re-scoped or rotated PAT without a redeploy.</p>
+        </div>
+
+        <dl class="facts">
+            <dt>Active token</dt><dd id="fact-token">—</dd>
+            <dt>Gist</dt><dd><a id="fact-gist" href="#" target="_blank" rel="noopener">open ↗</a></dd>
+            <dt>Notes</dt><dd id="fact-notes">—</dd>
+            <dt>Files</dt><dd id="fact-files">—</dd>
+        </dl>
+
+        <div class="modal-actions">
+            <button id="reload-btn" class="btn btn-ghost" type="button">
+                <svg class="ico"><use href="#i-refresh"></use></svg> Reload from gist
+            </button>
+            <span class="spacer"></span>
+            <button id="settings-cancel" class="btn btn-ghost" type="button">Cancel</button>
+            <button id="settings-save" class="btn btn-primary" type="button">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="confirm-modal" class="modal" hidden>
+    <div class="modal-card modal-sm">
+        <h2 id="confirm-title">Are you sure?</h2>
+        <p id="confirm-body" class="confirm-body"></p>
+        <div class="modal-actions">
+            <span class="spacer"></span>
+            <button id="confirm-cancel" class="btn btn-ghost" type="button">Cancel</button>
+            <button id="confirm-ok" class="btn btn-danger" type="button">Delete</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="./config.js?v=1"></script>
+<script src="./crypto.js?v=1"></script>
+<script src="./store.js?v=1"></script>
+<script src="./app.js?v=1"></script>
+</body>
+</html>

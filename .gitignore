@@ -1,0 +1,6 @@
+# The PAT lives outside this repo on purpose (see README → The token).
+# This is belt-and-braces in case one is ever dropped in here.
+token.txt
+*.token
+.DS_Store
+node_modules/
