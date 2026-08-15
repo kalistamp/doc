@@ -126,9 +126,25 @@ HTTPS.
 
 ---
 
+## Two machines at once
+
+Sync is last-write-wins on the whole document. There is no merge: if you edit
+the same note on two machines without syncing in between, the second save
+wins outright.
+
+In practice this rarely bites, because saves land about a second after you
+stop typing. If you know another machine has been busy, click the status pill
+first — it pushes anything outstanding and then pulls.
+
+---
+
 ## Deployment
 
-Pushing to `main` publishes it; GitHub Pages serves the repo root. `.nojekyll`
-is there to stop Jekyll from touching the files. Asset links carry a `?v=`
-cache buster — bump it when you change a script or the stylesheet so returning
-visitors do not run a stale file against new markup.
+Pushing to `main` publishes it. `.nojekyll` stops Jekyll from touching the
+files, and asset links carry a `?v=` cache buster — bump it when you change a
+script or the stylesheet so returning visitors do not run a stale file against
+new markup.
+
+Pages has to be switched on once by hand, under
+**Settings → Pages → Source: Deploy from a branch → `main` / `(root)`**. It
+cannot be done with a gist-scoped token.
