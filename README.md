@@ -54,6 +54,10 @@ two overlapping PATCHes to the same gist can land out of order and quietly
 undo each other. A failed write puts its dirty flag back so the next edit,
 or the Retry button, carries it up again.
 
+The debounce has a 5 s ceiling. Without one it starves: typing steadily
+resets the timer on every keystroke, so the app looks like it is saving and
+never actually does.
+
 ### The token
 
 The repo is public, so the PAT cannot sit in it as plaintext: GitHub secret
