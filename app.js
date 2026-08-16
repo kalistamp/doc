@@ -1,18 +1,23 @@
 /* ============================================================
    DOCKET SHARING — app
 
-   State is three collections:
-     notes    [{ id, title, body, pinned, folder, created, updated }]
+   State is four collections, all of them in the gist:
+     notes    [{ id, kind, title, body|items, pinned, pinnedAt, folder,
+                 created, updated }]
      files    [{ id, name, size, type, folder, added }]   ← metadata only
      folders  [{ id, name, created }]
+     trash    [{ kind, item, deletedAt }]
+
+   A note is either kind 'note' (a `body` string) or kind 'checklist'
+   (an `items` array). Anything without a kind is a plain note, which is
+   what every note written before checklists existed looks like.
 
    A folder is only a label: `folder` holds its id, so deleting a folder
    never deletes what was in it.
 
-   Both are cached in localStorage so the app works before you have
-   connected a gist, and both are pushed to the gist when you have.
-   File *bytes* never sit in either: they live one-per-file in the gist
-   and are fetched only when downloaded (see store.js).
+   All four are cached in localStorage so the app works before a gist is
+   connected. File *bytes* never sit in either store: they live
+   one-per-file in the gist and are fetched only when downloaded.
    ============================================================ */
 
 (function () {
@@ -22,21 +27,23 @@
     const $ = (sel) => document.querySelector(sel);
     const el = (id) => document.getElementById(id);
 
-    const LS_NOTES = 'docket.notes';
-    const LS_FILES = 'docket.files';
-    const LS_FOLDERS = 'docket.folders';
-    const LS_ACTIVE = 'docket.activeFolder';
+    const LS = {
+        notes: 'docket.notes', files: 'docket.files', folders: 'docket.folders',
+        trash: 'docket.trash', active: 'docket.activeFolder',
+        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort'
+    };
 
     let notes = [];
     let files = [];
     let folders = [];
+    let trash = [];
     let unlocked = false;
     let focusId = null;
 
     /* Which folder the bar is filtered to: null = All, UNFILED = the items
        with no folder, otherwise a folder id. The sentinel is spelled out
-       rather than being a blank or symbolic value so it is greppable and
-       can never collide with a uid(), which is base36 only. */
+       so it is greppable and can never collide with a uid(), which is
+       base36 only. */
     const UNFILED = '__unfiled__';
     let activeFolder = null;
 
@@ -76,32 +83,67 @@
     const isTexty = (type, name) =>
         TEXTY.test(type || '') || /\.(txt|md|json|csv|log|ya?ml|xml|js|ts|css|html|sh|py)$/i.test(name);
 
-    function toast(msg) {
-        const t = el('toast');
-        t.textContent = msg;
-        t.hidden = false;
-        clearTimeout(toast._t);
-        toast._t = setTimeout(() => { t.hidden = true; }, 3200);
+    const isList = (n) => n.kind === 'checklist';
+    const lineCount = (s) => (s ? s.split('\n').length : 0);
+
+    /** The searchable / sortable text of a note, whichever kind it is. */
+    const noteText = (n) =>
+        isList(n) ? (n.items || []).map((i) => i.text).join('\n') : (n.body || '');
+
+    /* An untitled note shows its first line as the title instead of the
+       word "Untitled". It is shown, never stored — so typing a real title
+       still works and nothing is silently rewritten under you. */
+    function derivedTitle(n) {
+        const first = noteText(n).split('\n').find((l) => l.trim());
+        return (first || '').trim().slice(0, 80);
     }
+    const titleOf = (n) => ((n.title || '').trim() || derivedTitle(n) || 'Untitled');
+
+    /* ---- toast, with an optional Undo ---------------------------------- */
+
+    let undoFn = null;
+
+    function toast(msg, onUndo) {
+        el('toast-text').textContent = msg;
+        undoFn = onUndo || null;
+        el('toast-undo').hidden = !undoFn;
+        el('toast').hidden = false;
+        clearTimeout(toast._t);
+        toast._t = setTimeout(hideToast, onUndo ? CFG.UNDO_MS : 3200);
+    }
+    function hideToast() {
+        el('toast').hidden = true;
+        undoFn = null;
+    }
+    el('toast-undo').addEventListener('click', () => {
+        const fn = undoFn;
+        hideToast();
+        if (fn) fn();
+    });
+
+    /* ---- persistence ---------------------------------------------------- */
 
     function cache() {
         try {
-            localStorage.setItem(LS_NOTES, JSON.stringify(notes));
-            localStorage.setItem(LS_FILES, JSON.stringify(files));
-            localStorage.setItem(LS_FOLDERS, JSON.stringify(folders));
+            localStorage.setItem(LS.notes, JSON.stringify(notes));
+            localStorage.setItem(LS.files, JSON.stringify(files));
+            localStorage.setItem(LS.folders, JSON.stringify(folders));
+            localStorage.setItem(LS.trash, JSON.stringify(trash));
         } catch (e) { /* quota or private mode — the gist is the real home */ }
     }
 
     function readCache() {
+        const get = (k) => { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { return []; } };
+        const n = get(LS.notes), f = get(LS.files), d = get(LS.folders), t = get(LS.trash);
+        if (Array.isArray(n)) notes = n;
+        if (Array.isArray(f)) files = f;
+        if (Array.isArray(d)) folders = d;
+        if (Array.isArray(t)) trash = t;
         try {
-            const n = JSON.parse(localStorage.getItem(LS_NOTES) || '[]');
-            const f = JSON.parse(localStorage.getItem(LS_FILES) || '[]');
-            const d = JSON.parse(localStorage.getItem(LS_FOLDERS) || '[]');
-            if (Array.isArray(n)) notes = n;
-            if (Array.isArray(f)) files = f;
-            if (Array.isArray(d)) folders = d;
-            activeFolder = localStorage.getItem(LS_ACTIVE) || null;
-        } catch (e) { /* leave the empties */ }
+            activeFolder = localStorage.getItem(LS.active) || null;
+            el('note-sort').value = localStorage.getItem(LS.noteSort) || 'updated';
+            el('file-sort').value = localStorage.getItem(LS.fileSort) || 'added';
+        } catch (e) {}
     }
 
     /* Every mutation goes through here: cache locally, then queue a push. */
@@ -134,12 +176,14 @@
         unlocked = true;
 
         Store.bind(() => ({
-            notes, files, folders, version: 3, updated: new Date().toISOString()
+            notes, files, folders, trash,
+            version: 4, updated: new Date().toISOString()
         }));
 
         /* Show the cached copy immediately, then reconcile with the gist.
            Opening straight into your notes beats a spinner. */
         readCache();
+        purgeTrash();
         renderAll();
         await pullFromGist();
         reflectConnection();
@@ -168,12 +212,15 @@
                 notes = mergeById(data.notes, notes);
                 files = mergeById(data.files, files);
                 folders = mergeById(data.folders, folders);
+                trash = data.trash.concat(trash);
             } else {
                 notes = data.notes;
                 files = data.files;
                 folders = data.folders;
+                trash = data.trash;
             }
             pruneFolder();
+            purgeTrash();
             cache();
             renderAll();
         } catch (err) { /* onStatus already surfaced it */ }
@@ -253,19 +300,26 @@
        TABS
        ============================================================ */
 
-    document.querySelectorAll('.tab').forEach((tab) => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach((t) => {
-                const on = t === tab;
-                t.classList.toggle('is-active', on);
-                t.setAttribute('aria-selected', String(on));
-            });
-            document.querySelectorAll('.panel').forEach((p) => {
-                p.classList.toggle('is-active', p.id === `panel-${tab.dataset.tab}`);
-            });
-            renderFolders();
+    const activeTab = () => document.querySelector('.tab.is-active').dataset.tab;
+
+    function showTab(name) {
+        document.querySelectorAll('.tab').forEach((t) => {
+            const on = t.dataset.tab === name;
+            t.classList.toggle('is-active', on);
+            t.setAttribute('aria-selected', String(on));
         });
-    });
+        document.querySelectorAll('.panel').forEach((p) => {
+            p.classList.toggle('is-active', p.id === `panel-${name}`);
+        });
+        /* Folders do not apply to the trash — it is a flat list of things
+           on their way out, and filtering it by folder would only hide
+           what you came here to find. */
+        el('folder-bar').hidden = name === 'trash';
+        renderFolders();
+    }
+
+    document.querySelectorAll('.tab').forEach((tab) =>
+        tab.addEventListener('click', () => showTab(tab.dataset.tab)));
 
     /* ============================================================
        THEME
@@ -277,12 +331,48 @@
     });
 
     /* ============================================================
+       SEARCH + SORT
+       ============================================================ */
+
+    const query = () => el('search').value.trim().toLowerCase();
+
+    const matchesNote = (n) => {
+        const q = query();
+        return !q || (n.title || '').toLowerCase().includes(q) ||
+                     noteText(n).toLowerCase().includes(q);
+    };
+    const matchesFile = (f) => {
+        const q = query();
+        return !q || f.name.toLowerCase().includes(q);
+    };
+
+    const NOTE_SORTS = {
+        updated: (a, b) => new Date(b.updated || 0) - new Date(a.updated || 0),
+        created: (a, b) => new Date(b.created || 0) - new Date(a.created || 0),
+        title: (a, b) => titleOf(a).localeCompare(titleOf(b), undefined, { sensitivity: 'base' })
+    };
+    const FILE_SORTS = {
+        added: (a, b) => new Date(b.added || 0) - new Date(a.added || 0),
+        name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+        size: (a, b) => (b.size || 0) - (a.size || 0)
+    };
+
+    el('search').addEventListener('input', () => { renderNotes(); renderFiles(); });
+
+    el('note-sort').addEventListener('change', () => {
+        try { localStorage.setItem(LS.noteSort, el('note-sort').value); } catch (e) {}
+        renderNotes();
+    });
+    el('file-sort').addEventListener('change', () => {
+        try { localStorage.setItem(LS.fileSort, el('file-sort').value); } catch (e) {}
+        renderFiles();
+    });
+
+    /* ============================================================
        FOLDERS
 
        One shared set across both tabs — a folder holds notes and files
-       alike, and the bar filters whichever tab is showing. Membership is
-       a single `folder` id on the item, so a folder is only ever a label:
-       deleting one never deletes what is in it.
+       alike, and the bar filters whichever tab is showing.
        ============================================================ */
 
     const folderName = (id) => {
@@ -308,17 +398,14 @@
     function setActiveFolder(id, quiet) {
         activeFolder = id;
         try {
-            if (id) localStorage.setItem(LS_ACTIVE, id);
-            else localStorage.removeItem(LS_ACTIVE);
+            if (id) localStorage.setItem(LS.active, id);
+            else localStorage.removeItem(LS.active);
         } catch (e) {}
         if (quiet) return;
         renderFolders();
         renderNotes();
         renderFiles();
     }
-
-    const activeTab = () =>
-        document.querySelector('.tab.is-active').dataset.tab;
 
     /* Counts follow the tab you are on: "Work 3" means three notes while
        you are reading notes, three files while you are reading files. */
@@ -331,16 +418,19 @@
         const pool = activeTab() === 'files' ? files : notes;
         const unfiled = pool.filter((i) => !i.folder).length;
 
-        const chip = (id, label, count, deletable) => `
+        const chip = (id, label, count, own) => `
             <button class="chip${activeFolder === id ? ' is-active' : ''}"
                     type="button" data-folder="${id === null ? '' : esc(id)}"
                     role="tab" aria-selected="${activeFolder === id}">
                 ${id === null ? '' : '<svg class="ico"><use href="#i-folder"></use></svg>'}
                 <span class="chip-label">${esc(label)}</span>
                 <span class="chip-count">${count}</span>
-                ${deletable ? `<span class="chip-x" role="button" tabindex="0"
-                     data-del="${esc(id)}" aria-label="Delete folder ${esc(label)}">
-                     <svg class="ico"><use href="#i-x"></use></svg></span>` : ''}
+                ${own ? `<span class="chip-act" role="button" tabindex="0"
+                     data-rename="${esc(id)}" aria-label="Rename folder ${esc(label)}"
+                     title="Rename"><svg class="ico"><use href="#i-pencil"></use></svg></span>
+                   <span class="chip-act" role="button" tabindex="0"
+                     data-del="${esc(id)}" aria-label="Delete folder ${esc(label)}"
+                     title="Delete"><svg class="ico"><use href="#i-x"></use></svg></span>` : ''}
             </button>`;
 
         el('folder-chips').innerHTML =
@@ -350,12 +440,33 @@
     }
 
     el('folder-chips').addEventListener('click', (e) => {
-        const x = e.target.closest('.chip-x');
-        if (x) { e.stopPropagation(); askDeleteFolder(x.dataset.del); return; }
+        const rename = e.target.closest('[data-rename]');
+        if (rename) { e.stopPropagation(); askRenameFolder(rename.dataset.rename); return; }
+        const del = e.target.closest('[data-del]');
+        if (del) { e.stopPropagation(); askDeleteFolder(del.dataset.del); return; }
         const chip = e.target.closest('.chip');
         if (!chip) return;
         setActiveFolder(chip.dataset.folder || null);
     });
+
+    function askRenameFolder(id) {
+        const folder = folders.find((f) => f.id === id);
+        if (!folder) return;
+        openPrompt({
+            title: 'Rename folder', label: 'Folder name', value: folder.name, max: 40,
+            onSave(name) {
+                if (folders.some((f) => f.id !== id &&
+                        f.name.toLowerCase() === name.toLowerCase())) {
+                    toast('You already have a folder with that name');
+                    return false;          /* keep the dialog open */
+                }
+                folder.name = name;
+                renderAll();
+                commit();
+                toast(`Renamed to “${name}”`);
+            }
+        });
+    }
 
     function askDeleteFolder(id) {
         const name = folderName(id);
@@ -413,10 +524,7 @@
     function assignFolder(id) {
         if (!folderTarget) return;
         const item = itemOf(folderTarget);
-        if (item) {
-            item.folder = id;
-            if (folderTarget.kind === 'note') item.updated = new Date().toISOString();
-        }
+        if (item) item.folder = id;
         closeFolderModal();
         renderAll();
         commit();
@@ -463,35 +571,36 @@
        NOTES
        ============================================================ */
 
-    function sortedNotes() {
-        const q = el('note-search').value.trim().toLowerCase();
-        return notes
-            .filter(inActiveFolder)
-            .filter((n) => !q ||
-                (n.title || '').toLowerCase().includes(q) ||
-                (n.body || '').toLowerCase().includes(q))
-            .slice()
-            .sort((a, b) =>
-                (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) ||
-                new Date(b.updated || 0) - new Date(a.updated || 0));
+    const findNote = (id) => notes.find((n) => n.id === id);
+
+    /* Pinned notes are pulled into their own band above the rest, sorted
+       by when you pinned them. In a masonry flow they would otherwise be
+       scattered down the first column, which is the opposite of what
+       pinning is for. */
+    function splitNotes() {
+        const visible = notes.filter(inActiveFolder).filter(matchesNote);
+        const cmp = NOTE_SORTS[el('note-sort').value] || NOTE_SORTS.updated;
+        const pinned = visible.filter((n) => n.pinned)
+            .sort((a, b) => new Date(b.pinnedAt || b.updated || 0) - new Date(a.pinnedAt || a.updated || 0));
+        const rest = visible.filter((n) => !n.pinned).sort(cmp);
+        return { pinned, rest, total: visible.length };
     }
 
-    const lineCount = (s) => (s ? s.split('\n').length : 0);
+    function noteCard(n) {
+        const derived = !((n.title || '').trim()) && derivedTitle(n);
+        const body = isList(n) ? checklistMarkup(n) : `
+            <textarea class="note-body" placeholder="Start typing…"
+                      aria-label="Note body"></textarea>`;
 
-    function renderNotes() {
-        const grid = el('note-grid');
-        const list = sortedNotes();
-
-        el('count-notes').textContent = notes.length;
-        el('notes-empty').hidden = notes.length !== 0;
-
-        grid.innerHTML = list.map((n) => `
-            <article class="note${n.pinned ? ' is-pinned' : ''}" data-id="${n.id}">
-                <input class="note-title" type="text" value="${esc(n.title || '')}"
-                       placeholder="Untitled" maxlength="120" aria-label="Note title">
+        return `
+            <article class="note${n.pinned ? ' is-pinned' : ''}${isList(n) ? ' is-list' : ''}"
+                     data-id="${n.id}">
+                <input class="note-title${derived ? ' is-derived' : ''}" type="text"
+                       value="${esc(n.title || '')}"
+                       placeholder="${esc(derived || 'Untitled')}"
+                       maxlength="120" aria-label="Note title">
                 <div class="note-bodywrap">
-                    <textarea class="note-body" placeholder="Start typing…"
-                              aria-label="Note body"></textarea>
+                    ${body}
                     <div class="note-fade" aria-hidden="true"></div>
                 </div>
                 <button class="note-expand" type="button">
@@ -516,112 +625,322 @@
                         <svg class="ico"><use href="#i-trash"></use></svg>
                     </button>
                 </div>
-            </article>`).join('');
+            </article>`;
+    }
+
+    function checklistMarkup(n) {
+        const items = n.items || [];
+        const done = items.filter((i) => i.done).length;
+        return `
+            <div class="check-wrap">
+                ${items.length ? `<div class="check-progress">${done} of ${items.length} done</div>` : ''}
+                <ul class="check-list">
+                    ${items.map((i) => `
+                        <li class="check-item${i.done ? ' is-done' : ''}" data-item="${esc(i.id)}">
+                            <button class="check-box" type="button" role="checkbox"
+                                    aria-checked="${i.done}" aria-label="Toggle item">
+                                <svg class="ico"><use href="#i-check"></use></svg>
+                            </button>
+                            <input class="check-text" type="text" value="${esc(i.text)}"
+                                   placeholder="Item" aria-label="Item text">
+                            <button class="check-del" type="button" aria-label="Remove item">
+                                <svg class="ico"><use href="#i-x"></use></svg>
+                            </button>
+                        </li>`).join('')}
+                </ul>
+                <button class="check-add" type="button">
+                    <svg class="ico"><use href="#i-plus"></use></svg> Add item
+                </button>
+            </div>`;
+    }
+
+    function renderNotes() {
+        const { pinned, rest, total } = splitNotes();
+
+        el('count-notes').textContent = query()
+            ? `${total}` : `${notes.length}`;
+        el('notes-empty').hidden = notes.length !== 0;
+        el('note-none').hidden = !(total === 0 && notes.length > 0);
+
+        el('pinned-wrap').hidden = pinned.length === 0;
+        el('others-title').hidden = rest.length === 0;
+        el('pinned-grid').innerHTML = pinned.map(noteCard).join('');
+        el('note-grid').innerHTML = rest.map(noteCard).join('');
 
         /* Bodies are assigned, not interpolated into the markup. The HTML
            parser drops a leading newline inside <textarea>, so a note that
            opens with a blank line would lose it on every re-render — and
            this grid re-renders on pin, search, delete and sync. */
-        grid.querySelectorAll('.note-body').forEach((ta, i) => {
-            ta.value = list[i].body || '';
-            sizeNote(ta);
+        document.querySelectorAll('.note').forEach((card) => {
+            const n = findNote(card.dataset.id);
+            if (!n) return;
+            const ta = card.querySelector('.note-body');
+            if (ta) ta.value = n.body || '';
+            sizeCard(card);
         });
-
-        if (list.length === 0 && notes.length > 0) {
-            grid.innerHTML = '<p class="hint">No notes match that search.</p>';
-        }
     }
 
-    /* Grow a note to fit its text, but only up to NOTE_COLLAPSE_PX. Past
-       that the card clamps and grows an Expand control instead — one
+    /* Grow a card to fit its content, but only up to NOTE_COLLAPSE_PX.
+       Past that it clamps and grows an Expand control instead — one
        pasted file should not push every other note off the screen. */
-    function sizeNote(ta) {
-        const card = ta.closest('.note');
-        ta.style.height = 'auto';
-        const full = ta.scrollHeight;
-        const clamped = full > CFG.NOTE_COLLAPSE_PX;
+    function sizeCard(card) {
+        const n = findNote(card.dataset.id);
+        if (!n) return;
+        const limit = CFG.NOTE_COLLAPSE_PX;
+        let clamped;
 
-        ta.style.height = `${clamped ? CFG.NOTE_COLLAPSE_PX : Math.max(full, 132)}px`;
+        if (isList(n)) {
+            const wrap = card.querySelector('.check-wrap');
+            wrap.style.maxHeight = 'none';
+            clamped = wrap.scrollHeight > limit;
+            wrap.style.maxHeight = clamped ? `${limit}px` : '';
+        } else {
+            const ta = card.querySelector('.note-body');
+            ta.style.height = 'auto';
+            const full = ta.scrollHeight;
+            clamped = full > limit;
+            ta.style.height = `${clamped ? limit : Math.max(full, 96)}px`;
+        }
+
         card.classList.toggle('is-clamped', clamped);
-
         if (clamped) {
-            const note = findNote(card.dataset.id);
-            const lines = lineCount(note && note.body);
-            card.querySelector('.note-expand-label').textContent =
-                `Expand · ${lines.toLocaleString()} lines`;
+            card.querySelector('.note-expand-label').textContent = isList(n)
+                ? `Expand · ${(n.items || []).length} items`
+                : `Expand · ${lineCount(n.body).toLocaleString()} lines`;
         }
     }
 
-    const findNote = (id) => notes.find((n) => n.id === id);
+    /* The borrowed title has to follow what you type, but re-rendering the
+       card on every keystroke would blow away the caret — so it, and the
+       stamp, are patched in place instead. */
+    function refreshDerived(note, card) {
+        const input = card.querySelector('.note-title');
+        if (input.value.trim()) { input.classList.remove('is-derived'); return; }
+        const d = derivedTitle(note);
+        input.placeholder = d || 'Untitled';
+        input.classList.toggle('is-derived', Boolean(d));
+    }
 
     function touchNote(note, card) {
         note.updated = new Date().toISOString();
-        /* Update the stamp in place rather than re-rendering: a re-render
-           mid-keystroke would blow away the caret. */
-        if (card) card.querySelector('.note-stamp').textContent = relTime(note.updated);
+        if (card) {
+            card.querySelector('.note-stamp').textContent = relTime(note.updated);
+            refreshDerived(note, card);
+        }
         commit();
     }
 
-    function newNote() {
+    function newNote(kind) {
         const now = new Date().toISOString();
-        notes.unshift({
-            id: uid(), title: '', body: '', pinned: false,
+        const note = {
+            id: uid(), kind, title: '', pinned: false, pinnedAt: null,
             folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
             created: now, updated: now
-        });
+        };
+        if (kind === 'checklist') note.items = [{ id: uid(), text: '', done: false }];
+        else note.body = '';
+
+        notes.unshift(note);
         renderNotes();
         commit();
-        const first = $('.note .note-title');
+        /* A brand new note is never pinned, so it is the first card in the
+           unpinned grid — focus its title so you can just start typing. */
+        const first = el('note-grid').querySelector('.note-title');
         if (first) first.focus();
     }
 
-    el('new-note-btn').addEventListener('click', newNote);
+    el('new-note-btn').addEventListener('click', () => newNote('note'));
+    el('new-list-btn').addEventListener('click', () => newNote('checklist'));
     document.querySelectorAll('[data-act="new-note"]').forEach((b) =>
-        b.addEventListener('click', newNote));
+        b.addEventListener('click', () => newNote('note')));
 
-    /* One delegated listener per event type, rather than four per card —
-       note cards re-render often enough that per-card wiring would leak. */
-    el('note-grid').addEventListener('input', (e) => {
+    /* One delegated listener per event type on the whole notes panel,
+       rather than several per card — cards re-render often enough that
+       per-card wiring would leak handlers. */
+    el('panel-notes').addEventListener('input', (e) => {
         const card = e.target.closest('.note');
         if (!card) return;
         const note = findNote(card.dataset.id);
         if (!note) return;
+        const t = e.target;
 
-        if (e.target.classList.contains('note-title')) note.title = e.target.value;
-        else if (e.target.classList.contains('note-body')) {
-            note.body = e.target.value;
-            sizeNote(e.target);
+        if (t.classList.contains('note-title')) {
+            note.title = t.value;
+            t.classList.toggle('is-derived', !t.value.trim());
+        } else if (t.classList.contains('note-body')) {
+            note.body = t.value;
+            sizeCard(card);
+        } else if (t.classList.contains('check-text')) {
+            const item = (note.items || []).find((i) => i.id === t.closest('.check-item').dataset.item);
+            if (item) item.text = t.value;
         } else return;
 
         touchNote(note, card);
     });
 
-    el('note-grid').addEventListener('click', (e) => {
+    el('panel-notes').addEventListener('click', (e) => {
         const card = e.target.closest('.note');
         if (!card) return;
         const note = findNote(card.dataset.id);
         if (!note) return;
 
-        if (e.target.closest('.note-folder')) {
+        if (e.target.closest('.check-box')) {
+            const row = e.target.closest('.check-item');
+            const item = (note.items || []).find((i) => i.id === row.dataset.item);
+            if (item) {
+                item.done = !item.done;
+                touchNote(note, card);
+                renderNotes();
+            }
+        } else if (e.target.closest('.check-del')) {
+            const row = e.target.closest('.check-item');
+            note.items = (note.items || []).filter((i) => i.id !== row.dataset.item);
+            touchNote(note, card);
+            renderNotes();
+        } else if (e.target.closest('.check-add')) {
+            addChecklistItem(note, card);
+        } else if (e.target.closest('.note-folder')) {
             openFolderModal({ kind: 'note', id: note.id });
         } else if (e.target.closest('.note-expand')) {
             openFocus(note.id);
         } else if (e.target.closest('.act-pin')) {
             note.pinned = !note.pinned;
-            touchNote(note, null);
+            /* Pinning is not an edit, so it must not bump `updated` — that
+               would make a note you merely pinned look freshly written and
+               jump it up a recently-updated sort. */
+            note.pinnedAt = note.pinned ? new Date().toISOString() : null;
             renderNotes();
+            commit();
         } else if (e.target.closest('.act-del')) {
-            const label = (note.title || '').trim() || 'this untitled note';
-            confirmAction('Delete note?', `“${label}” will be removed everywhere this docket syncs.`, () => {
-                notes = notes.filter((n) => n.id !== note.id);
-                renderNotes();
+            trashItem('note', note);
+        }
+    });
+
+    function addChecklistItem(note, card) {
+        note.items = note.items || [];
+        note.items.push({ id: uid(), text: '', done: false });
+        touchNote(note, card);
+        renderNotes();
+        const live = document.querySelector(`.note[data-id="${note.id}"]`);
+        const inputs = live ? live.querySelectorAll('.check-text') : [];
+        if (inputs.length) inputs[inputs.length - 1].focus();
+    }
+
+    /* Enter at the end of a checklist row adds the next one, the way every
+       list app behaves; without it you have to reach for the mouse on
+       every single item. */
+    el('panel-notes').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.target.classList.contains('check-text')) return;
+        e.preventDefault();
+        const card = e.target.closest('.note');
+        const note = findNote(card.dataset.id);
+        if (note) addChecklistItem(note, card);
+    });
+
+    /* ============================================================
+       TRASH
+       ============================================================ */
+
+    function trashItem(kind, item) {
+        const label = kind === 'note' ? titleOf(item) : item.name;
+        if (kind === 'note') notes = notes.filter((n) => n.id !== item.id);
+        else files = files.filter((f) => f.id !== item.id);
+
+        trash.unshift({ kind, item, deletedAt: new Date().toISOString() });
+        renderAll();
+        commit();
+
+        /* The blob stays in the gist while a file is only trashed — there
+           would be nothing to restore otherwise. Emptying the trash is
+           what actually deletes it. */
+        toast(`${kind === 'note' ? 'Note' : 'File'} “${label}” moved to trash`, () => {
+            restoreFromTrash(item.id);
+        });
+    }
+
+    function restoreFromTrash(id) {
+        const idx = trash.findIndex((t) => t.item.id === id);
+        if (idx === -1) return;
+        const [entry] = trash.splice(idx, 1);
+        if (entry.kind === 'note') notes.unshift(entry.item);
+        else files.unshift(entry.item);
+        pruneFolder();
+        renderAll();
+        commit();
+        toast('Restored');
+    }
+
+    function purgeForever(entry) {
+        trash = trash.filter((t) => t.item.id !== entry.item.id);
+        if (entry.kind === 'file') Store.dropBlob(entry.item.id);
+    }
+
+    /* Anything sitting in the trash past TRASH_DAYS goes on the next load.
+       Files take their gist blob with them, which is the only point at
+       which storage is actually reclaimed. */
+    function purgeTrash() {
+        const cutoff = Date.now() - CFG.TRASH_DAYS * 86400000;
+        const stale = trash.filter((t) => new Date(t.deletedAt || 0).getTime() < cutoff);
+        if (!stale.length) return;
+        stale.forEach(purgeForever);
+        cache();
+    }
+
+    function renderTrash() {
+        el('count-trash').textContent = trash.length;
+        el('tab-trash').hidden = trash.length === 0;
+        if (!trash.length && activeTab() === 'trash') showTab('notes');
+
+        el('trash-lede').textContent = trash.length
+            ? `Deleted items are kept for ${CFG.TRASH_DAYS} days, then removed.`
+            : 'Nothing in the trash.';
+
+        el('trash-list').innerHTML = trash.map((t) => `
+            <li class="file" data-id="${esc(t.item.id)}">
+                <span class="file-icon" aria-hidden="true">
+                    <svg class="ico"><use href="#i-${t.kind === 'note' ? 'note' : 'file'}"></use></svg>
+                </span>
+                <div class="file-main">
+                    <span class="file-name">${esc(t.kind === 'note' ? titleOf(t.item) : t.item.name)}</span>
+                    <span class="file-meta">${t.kind} · deleted ${esc(relTime(t.deletedAt))}</span>
+                </div>
+                <div class="file-acts">
+                    <button class="note-act act-restore" type="button" title="Restore"
+                            aria-label="Restore"><svg class="ico"><use href="#i-undo"></use></svg></button>
+                    <button class="note-act act-purge" type="button" title="Delete forever"
+                            aria-label="Delete forever"><svg class="ico"><use href="#i-trash"></use></svg></button>
+                </div>
+            </li>`).join('');
+    }
+
+    el('trash-list').addEventListener('click', (e) => {
+        const row = e.target.closest('.file');
+        if (!row) return;
+        const entry = trash.find((t) => t.item.id === row.dataset.id);
+        if (!entry) return;
+
+        if (e.target.closest('.act-restore')) restoreFromTrash(entry.item.id);
+        else if (e.target.closest('.act-purge')) {
+            const label = entry.kind === 'note' ? titleOf(entry.item) : entry.item.name;
+            confirmAction('Delete forever?', `“${label}” cannot be recovered after this.`, () => {
+                purgeForever(entry);
+                renderAll();
                 commit();
-                toast('Note deleted');
+                toast('Deleted forever');
             });
         }
     });
 
-    el('note-search').addEventListener('input', renderNotes);
+    el('empty-trash-btn').addEventListener('click', () => {
+        if (!trash.length) return;
+        confirmAction('Empty the trash?',
+            `${trash.length} item${trash.length === 1 ? '' : 's'} will be gone for good.`, () => {
+                trash.slice().forEach(purgeForever);
+                renderAll();
+                commit();
+                toast('Trash emptied');
+            });
+    });
 
     /* ============================================================
        FOCUS VIEW
@@ -632,13 +951,26 @@
         if (!note) return;
         focusId = id;
         el('focus-title').value = note.title || '';
-        el('focus-body').value = note.body || '';
+        el('focus-title').placeholder = derivedTitle(note) || 'Untitled';
+
+        const list = isList(note);
+        el('focus-body').hidden = list;
+        el('focus-items').hidden = !list;
+        if (list) renderFocusItems(note);
+        else el('focus-body').value = note.body || '';
+
         updateFocusMeta();
         el('focus-modal').hidden = false;
         document.body.classList.add('is-locked');
-        el('focus-body').focus();
-        el('focus-body').setSelectionRange(0, 0);
-        el('focus-body').scrollTop = 0;
+        if (!list) {
+            el('focus-body').focus();
+            el('focus-body').setSelectionRange(0, 0);
+            el('focus-body').scrollTop = 0;
+        }
+    }
+
+    function renderFocusItems(note) {
+        el('focus-items').innerHTML = checklistMarkup(note);
     }
 
     function closeFocus() {
@@ -649,10 +981,18 @@
     }
 
     function updateFocusMeta() {
-        const body = el('focus-body').value;
-        const words = body.trim() ? body.trim().split(/\s+/).length : 0;
-        el('focus-meta').textContent =
-            `${lineCount(body).toLocaleString()} lines · ${words.toLocaleString()} words`;
+        const note = findNote(focusId);
+        if (!note) return;
+        if (isList(note)) {
+            const items = note.items || [];
+            el('focus-meta').textContent =
+                `${items.filter((i) => i.done).length} of ${items.length} done`;
+        } else {
+            const body = el('focus-body').value;
+            const words = body.trim() ? body.trim().split(/\s+/).length : 0;
+            el('focus-meta').textContent =
+                `${lineCount(body).toLocaleString()} lines · ${words.toLocaleString()} words`;
+        }
     }
 
     ['focus-title', 'focus-body'].forEach((id) => {
@@ -660,11 +1000,58 @@
             const note = findNote(focusId);
             if (!note) return;
             note.title = el('focus-title').value;
-            note.body = el('focus-body').value;
+            if (!isList(note)) note.body = el('focus-body').value;
             note.updated = new Date().toISOString();
             updateFocusMeta();
             commit();
         });
+    });
+
+    /* The checklist inside the focus view is the same markup as on a card,
+       so it needs the same handlers — scoped here rather than shared,
+       because this copy re-renders on its own schedule. */
+    el('focus-items').addEventListener('input', (e) => {
+        const note = findNote(focusId);
+        if (!note || !e.target.classList.contains('check-text')) return;
+        const item = (note.items || []).find((i) => i.id === e.target.closest('.check-item').dataset.item);
+        if (item) item.text = e.target.value;
+        note.updated = new Date().toISOString();
+        commit();
+    });
+
+    el('focus-items').addEventListener('click', (e) => {
+        const note = findNote(focusId);
+        if (!note) return;
+        const row = e.target.closest('.check-item');
+
+        if (e.target.closest('.check-box') && row) {
+            const item = (note.items || []).find((i) => i.id === row.dataset.item);
+            if (item) item.done = !item.done;
+        } else if (e.target.closest('.check-del') && row) {
+            note.items = (note.items || []).filter((i) => i.id !== row.dataset.item);
+        } else if (e.target.closest('.check-add')) {
+            note.items = note.items || [];
+            note.items.push({ id: uid(), text: '', done: false });
+        } else return;
+
+        note.updated = new Date().toISOString();
+        renderFocusItems(note);
+        updateFocusMeta();
+        commit();
+        const inputs = el('focus-items').querySelectorAll('.check-text');
+        if (e.target.closest('.check-add') && inputs.length) inputs[inputs.length - 1].focus();
+    });
+
+    el('focus-items').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.target.classList.contains('check-text')) return;
+        e.preventDefault();
+        const note = findNote(focusId);
+        if (!note) return;
+        note.items.push({ id: uid(), text: '', done: false });
+        renderFocusItems(note);
+        commit();
+        const inputs = el('focus-items').querySelectorAll('.check-text');
+        if (inputs.length) inputs[inputs.length - 1].focus();
     });
 
     el('focus-close').addEventListener('click', closeFocus);
@@ -674,8 +1061,10 @@
     });
 
     el('focus-copy').addEventListener('click', async () => {
+        const note = findNote(focusId);
+        if (!note) return;
         try {
-            await navigator.clipboard.writeText(el('focus-body').value);
+            await navigator.clipboard.writeText(plainText(note));
             toast('Note copied');
         } catch (err) { toast('Clipboard blocked by the browser'); }
     });
@@ -772,7 +1161,7 @@
         }
 
         if (!added) return;
-        renderFiles();
+        renderAll();
         commit();
         toast(`${added} file${added === 1 ? '' : 's'} uploading…`);
     }
@@ -795,21 +1184,30 @@
         return new Blob([bytes], { type: type || 'application/octet-stream' });
     }
 
+    function saveBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        /* Revoking immediately can beat the download on some browsers. */
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }
+
     function renderFiles() {
-        const list = el('file-list');
-        const q = el('file-search').value.trim().toLowerCase();
-        const shown = files.filter(inActiveFolder)
-                           .filter((f) => !q || f.name.toLowerCase().includes(q));
+        const shown = files.filter(inActiveFolder).filter(matchesFile)
+            .sort(FILE_SORTS[el('file-sort').value] || FILE_SORTS.added);
 
-        el('count-files').textContent = files.length;
+        el('count-files').textContent = query() ? `${shown.length}` : `${files.length}`;
+        el('file-none').hidden = !(shown.length === 0 && files.length > 0);
 
-        list.innerHTML = shown.map((f) => `
+        el('file-list').innerHTML = shown.map((f) => `
             <li class="file" data-id="${f.id}">
                 <span class="file-icon" aria-hidden="true">
                     <svg class="ico"><use href="#i-file"></use></svg>
                 </span>
                 <div class="file-main">
-                    <span class="file-name" title="${esc(f.name)}">${esc(f.name)}</span>
+                    <button class="file-name act-rename" type="button" title="Rename ${esc(f.name)}">${esc(f.name)}</button>
                     <span class="file-meta">${formatBytes(f.size)} · ${esc(relTime(f.added))}
                         · <button class="file-folder${f.folder ? ' is-set' : ''}" type="button"
                                   aria-label="Move to folder">${f.folder
@@ -833,10 +1231,6 @@
                 </div>
             </li>`).join('');
 
-        if (!shown.length && files.length) {
-            list.innerHTML = '<p class="hint">No files match that search.</p>';
-        }
-
         el('file-note').textContent = files.length
             ? `${files.length} of ${CFG.MAX_FILES} files · ${formatBytes(totalBytes())} stored in your gist`
             : '';
@@ -852,20 +1246,22 @@
             openFolderModal({ kind: 'file', id: meta.id });
             return;
         }
-
-        const btn = e.target.closest('.note-act');
-        if (!btn) return;
-
-        if (btn.classList.contains('act-del')) {
-            confirmAction('Delete file?', `“${meta.name}” will be removed everywhere this docket syncs.`, () => {
-                files = files.filter((f) => f.id !== meta.id);
-                Store.dropBlob(meta.id);
-                renderFiles();
-                commit();
-                toast('File deleted');
+        if (e.target.closest('.act-rename')) {
+            openPrompt({
+                title: 'Rename file', label: 'File name', value: meta.name, max: 200,
+                onSave(name) {
+                    meta.name = name;
+                    renderFiles();
+                    commit();
+                    toast(`Renamed to “${name}”`);
+                }
             });
             return;
         }
+        if (e.target.closest('.act-del')) { trashItem('file', meta); return; }
+
+        const btn = e.target.closest('.note-act');
+        if (!btn) return;
 
         /* Bytes are pulled on demand, so both of these are async and can
            take a moment on a large file. */
@@ -875,13 +1271,7 @@
             if (!payload) { toast('That file has no contents in the gist yet'); return; }
 
             if (btn.classList.contains('act-get')) {
-                const url = URL.createObjectURL(base64ToBlob(payload, meta.type));
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = meta.name;
-                a.click();
-                /* Revoking immediately can beat the download on some browsers. */
-                setTimeout(() => URL.revokeObjectURL(url), 30000);
+                saveBlob(base64ToBlob(payload, meta.type), meta.name);
             } else if (btn.classList.contains('act-copy')) {
                 await navigator.clipboard.writeText(
                     await base64ToBlob(payload, meta.type).text());
@@ -894,11 +1284,189 @@
         }
     });
 
-    el('file-search').addEventListener('input', renderFiles);
+    /* ============================================================
+       EXPORT / IMPORT
+       ============================================================ */
+
+    const stamp = () => new Date().toISOString().slice(0, 10);
+
+    function plainText(n) {
+        if (!isList(n)) return n.body || '';
+        return (n.items || []).map((i) => `[${i.done ? 'x' : ' '}] ${i.text}`).join('\n');
+    }
+
+    el('export-json-btn').addEventListener('click', () => {
+        const doc = { notes, files, folders, trash, version: 4, exported: new Date().toISOString() };
+        saveBlob(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }),
+                 `docket-${stamp()}.json`);
+        toast('Backup downloaded');
+    });
+
+    /* The .txt is for reading, not for restoring — so it is laid out for a
+       human, and it says so at the top rather than pretending otherwise. */
+    el('export-txt-btn').addEventListener('click', () => {
+        const rule = '='.repeat(60);
+        const out = [
+            'DOCKET SHARING', `exported ${new Date().toLocaleString()}`,
+            `${notes.length} notes, ${files.length} files`,
+            'This file is for reading. Use the .json export to restore.', ''
+        ];
+        notes.slice()
+            .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || NOTE_SORTS.updated(a, b))
+            .forEach((n) => {
+                out.push(rule);
+                out.push(titleOf(n) + (n.pinned ? '   [pinned]' : ''));
+                const bits = [];
+                if (n.folder) bits.push(`folder: ${folderName(n.folder)}`);
+                if (isList(n)) bits.push('checklist');
+                bits.push(`updated ${new Date(n.updated || Date.now()).toLocaleString()}`);
+                out.push(bits.join('   ·   '));
+                out.push('-'.repeat(60));
+                out.push(plainText(n));
+                out.push('');
+            });
+        if (files.length) {
+            out.push(rule, 'FILES', '-'.repeat(60));
+            files.forEach((f) => out.push(
+                `${f.name}   ${formatBytes(f.size)}${f.folder ? `   [${folderName(f.folder)}]` : ''}`));
+        }
+        saveBlob(new Blob([out.join('\n')], { type: 'text/plain' }), `docket-${stamp()}.txt`);
+        toast('Text export downloaded');
+    });
+
+    el('import-btn').addEventListener('click', () => el('import-input').click());
+
+    el('import-input').addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+
+        let doc;
+        try {
+            doc = JSON.parse(await file.text());
+        } catch (err) { toast('That file is not valid JSON'); return; }
+        if (!doc || !Array.isArray(doc.notes)) { toast('That does not look like a Docket backup'); return; }
+
+        el('settings-modal').hidden = true;
+        confirmAction('Import this backup?',
+            `It holds ${doc.notes.length} notes and ${(doc.files || []).length} files, and will replace what is here now. ` +
+            'Your file uploads stay in the gist either way.',
+            () => {
+                notes = doc.notes;
+                files = Array.isArray(doc.files) ? doc.files : [];
+                folders = Array.isArray(doc.folders) ? doc.folders : [];
+                trash = Array.isArray(doc.trash) ? doc.trash : [];
+                pruneFolder();
+                renderAll();
+                commit();
+                toast(`Imported ${notes.length} notes`);
+            });
+    });
 
     /* ============================================================
-       CONFIRM MODAL
+       VERSION HISTORY
        ============================================================ */
+
+    el('history-btn').addEventListener('click', async () => {
+        if (!Store.isConnected()) { toast('Connect a gist first — history lives in it'); return; }
+        el('settings-modal').hidden = true;
+        el('history-list').innerHTML = '<li class="hint">Loading…</li>';
+        el('history-modal').hidden = false;
+
+        /* history() is filled by the last load, so refresh it first —
+           otherwise this shows the list as it was when you unlocked. */
+        await pullFromGist();
+        const revs = Store.history();
+
+        el('history-list').innerHTML = revs.length ? revs.map((r, i) => `
+            <li class="history-row" data-sha="${esc(r.sha)}">
+                <div class="history-main">
+                    <span class="history-when">${esc(new Date(r.at).toLocaleString())}</span>
+                    <span class="history-delta">${i === 0 ? 'current' :
+                        `+${r.added || 0} / −${r.removed || 0} lines`}</span>
+                </div>
+                ${i === 0 ? '' : '<button class="btn btn-ghost btn-sm act-restore" type="button">Restore</button>'}
+            </li>`).join('')
+            : '<li class="hint">No revisions yet — save something first.</li>';
+    });
+
+    el('history-list').addEventListener('click', async (e) => {
+        const btn = e.target.closest('.act-restore');
+        if (!btn) return;
+        const sha = btn.closest('.history-row').dataset.sha;
+        const when = btn.closest('.history-row').querySelector('.history-when').textContent;
+
+        btn.disabled = true;
+        let snapshot;
+        try {
+            snapshot = await Store.atVersion(sha);
+        } catch (err) {
+            toast(err.message || 'Could not read that revision');
+            btn.disabled = false;
+            return;
+        }
+        btn.disabled = false;
+
+        el('history-modal').hidden = true;
+        confirmAction('Restore this version?',
+            `The docket will go back to ${when} — ${snapshot.notes.length} notes and ` +
+            `${snapshot.files.length} files. The current state stays in the history, so this is undoable.`,
+            () => {
+                notes = snapshot.notes;
+                files = snapshot.files;
+                folders = snapshot.folders;
+                trash = snapshot.trash;
+                pruneFolder();
+                renderAll();
+                commit();
+                toast(`Restored the version from ${when}`);
+            });
+    });
+
+    el('history-close').addEventListener('click', () => { el('history-modal').hidden = true; });
+    el('history-modal').addEventListener('click', (e) => {
+        if (e.target === el('history-modal')) el('history-modal').hidden = true;
+    });
+
+    /* ============================================================
+       PROMPT + CONFIRM MODALS
+       ============================================================ */
+
+    let promptSave = null;
+
+    /** A single-field dialog. onSave may return false to keep it open —
+     *  that is how a duplicate folder name reports itself without losing
+     *  what was typed. */
+    function openPrompt({ title, label, value, max, onSave }) {
+        el('prompt-title').textContent = title;
+        el('prompt-label').textContent = label;
+        el('prompt-input').value = value || '';
+        el('prompt-input').maxLength = max || 200;
+        promptSave = onSave;
+        el('prompt-modal').hidden = false;
+        el('prompt-input').focus();
+        el('prompt-input').select();
+    }
+
+    function submitPrompt() {
+        const value = el('prompt-input').value.trim();
+        if (!value) { el('prompt-input').focus(); return; }
+        if (promptSave && promptSave(value) === false) return;
+        closePrompt();
+    }
+    function closePrompt() {
+        el('prompt-modal').hidden = true;
+        promptSave = null;
+    }
+
+    el('prompt-ok').addEventListener('click', submitPrompt);
+    el('prompt-cancel').addEventListener('click', closePrompt);
+    el('prompt-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitPrompt(); }
+    });
+    el('prompt-modal').addEventListener('click', (e) => {
+        if (e.target === el('prompt-modal')) closePrompt();
+    });
 
     let confirmFn = null;
 
@@ -967,12 +1535,13 @@
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (!el('confirm-modal').hidden) closeConfirm();
+        else if (!el('prompt-modal').hidden) closePrompt();
         else if (!el('folder-modal').hidden) closeFolderModal();
+        else if (!el('history-modal').hidden) el('history-modal').hidden = true;
         else if (!el('settings-modal').hidden) el('settings-modal').hidden = true;
         else if (!el('focus-modal').hidden) closeFocus();
     });
 
-    /* Click the scrim (but not the card) to dismiss. */
     ['settings-modal', 'confirm-modal'].forEach((id) => {
         el(id).addEventListener('click', (e) => {
             if (e.target !== el(id)) return;
@@ -989,6 +1558,7 @@
         renderFolders();
         renderNotes();
         renderFiles();
+        renderTrash();
         reflectConnection();
     }
 
@@ -997,7 +1567,7 @@
        otherwise it would fight the caret. */
     setInterval(() => {
         if (!unlocked) return;
-        if (el('note-grid').contains(document.activeElement)) return;
+        if (el('panel-notes').contains(document.activeElement)) return;
         document.querySelectorAll('.note').forEach((card) => {
             const note = findNote(card.dataset.id);
             if (note) card.querySelector('.note-stamp').textContent = relTime(note.updated);
@@ -1005,13 +1575,13 @@
     }, 60000);
 
     /* Re-clamp on resize: a card that fits at desktop width may overflow
-       once the grid drops to one column. */
+       once the masonry drops to one column. */
     let resizeTimer = null;
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
             if (!unlocked) return;
-            document.querySelectorAll('.note-body').forEach(sizeNote);
+            document.querySelectorAll('.note').forEach(sizeCard);
         }, 150);
     });
 })();

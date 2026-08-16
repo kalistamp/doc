@@ -514,24 +514,24 @@ a { color: var(--accent); }
 .chip-add { color: var(--accent); border-style: dashed; }
 .chip-add:hover { background: var(--accent-wash); color: var(--accent); }
 
-/* The delete affordance only appears once the chip is hovered or selected,
-   so a row of folders reads as navigation rather than a row of X buttons. */
-.chip-x {
+/* Rename and delete only appear once the chip is hovered or selected, so a
+   row of folders reads as navigation rather than a row of buttons. */
+.chip-act {
     display: grid; place-items: center;
     width: 18px; height: 18px;
-    margin-right: -.25em;
     border-radius: var(--r-pill);
     opacity: 0;
     transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease);
 }
-.chip:hover .chip-x, .chip.is-active .chip-x { opacity: .55; }
-.chip-x:hover { opacity: 1 !important; background: rgba(128,128,128,.28); }
-.chip-x .ico { width: .8em; height: .8em; stroke-width: 2.4; }
+.chip-act:last-child { margin-right: -.25em; }
+.chip:hover .chip-act, .chip.is-active .chip-act { opacity: .55; }
+.chip-act:hover { opacity: 1 !important; background: rgba(128,128,128,.28); }
+.chip-act .ico { width: .8em; height: .8em; stroke-width: 2.4; }
 
-/* Touch has no hover, so on a phone the control is always visible on the
-   selected chip — otherwise a folder could never be deleted there. */
+/* Touch has no hover, so on a phone the controls are always visible on the
+   selected chip — otherwise a folder could never be renamed or deleted. */
 @media (hover: none) {
-    .chip.is-active .chip-x { opacity: .75; }
+    .chip.is-active .chip-act { opacity: .75; }
 }
 
 /* Picking a folder for one item */
@@ -594,11 +594,35 @@ a { color: var(--accent); }
     margin-bottom: 1.3rem;
 }
 
+/* Sort control. Styled as a quiet pill rather than a native select so it
+   sits beside the buttons without shouting. */
+.sort {
+    padding: .5em 2em .5em .9em;
+    min-height: 40px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-pill);
+    background: var(--surface);
+    color: var(--ink-soft);
+    font-size: .86rem; font-weight: 550;
+    cursor: pointer;
+    appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: calc(100% - 1.1em) 55%, calc(100% - .78em) 55%;
+    background-size: .32em .32em, .32em .32em;
+    background-repeat: no-repeat;
+}
+.sort:hover { border-color: var(--line-strong); color: var(--ink); }
+.sort:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+
 .search {
     position: relative;
     flex: 1; max-width: 380px;
     display: flex; align-items: center;
 }
+
+/* The one search box for the whole docket, above the tabs. */
+.search-global { max-width: none; margin-bottom: 1.1rem; }
 .search .ico {
     position: absolute; left: .85em;
     color: var(--ink-faint);
@@ -626,14 +650,36 @@ a { color: var(--accent); }
    NOTES
    ============================================================ */
 
+/* Masonry, via multi-column rather than grid.
+   ------------------------------------------------------------------
+   A CSS grid puts cards in ROWS, and a row is as tall as its tallest
+   card. Sit a two-line note beside a sixty-line one and the short card
+   leaves a dead band of whitespace underneath until the next row starts
+   — which is exactly the ragged gap this replaces.
+
+   Multi-column flows cards down a column and onto the next, so each one
+   takes only the height it needs and nothing is left hanging. The cost
+   is reading order: it runs down column one, then column two, rather
+   than left to right. For a board you scan rather than read in
+   sequence that is the right trade — and pinned notes are lifted into
+   their own band above, so the ordering that actually matters is kept.
+
+   (`grid-template-rows: masonry` would do this natively and keep row
+   order, but it is still not shipping unflagged anywhere.) */
 .note-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1.1rem;
-    align-items: start;
+    columns: 300px;
+    column-gap: 1.1rem;
 }
 
 .note {
+    /* Without this a card is free to be split across a column break,
+       leaving its footer stranded at the top of the next column. */
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+    page-break-inside: avoid;
+    margin: 0 0 1.1rem;
+    width: 100%;
+
     display: flex; flex-direction: column;
     background: var(--surface);
     border: 1px solid var(--line);
@@ -667,6 +713,12 @@ a { color: var(--accent); }
 }
 .note-title::placeholder { color: var(--ink-faint); font-style: italic; }
 .note-title:focus { outline: none; }
+
+/* An untitled note borrows its first line as a title. It sits in the
+   placeholder, so it is only ever shown — nothing is written back, and
+   typing a real title still just works. Not italic like a true
+   placeholder, because this one is standing in for real content. */
+.note-title.is-derived::placeholder { color: var(--ink-soft); font-style: normal; }
 
 .note-bodywrap { position: relative; }
 
@@ -751,6 +803,91 @@ a { color: var(--accent); }
 .note-act.is-working { color: var(--accent); pointer-events: none; }
 .note-act.is-working .ico { animation: spin 1s linear infinite; }
 
+/* ---- band titles (Pinned / Everything else) ---------------------- */
+
+.band-title {
+    display: flex; align-items: center; gap: .45em;
+    margin: 0 0 .8rem;
+    font-family: var(--font-body);
+    font-size: .76rem; font-weight: 700;
+    letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-faint);
+}
+.band-title .ico { width: .95em; height: .95em; color: var(--accent); }
+#others-title { margin-top: 1.6rem; }
+
+/* ---- checklists --------------------------------------------------- */
+
+.check-wrap { overflow: hidden; padding: .1rem 0 .5rem; }
+
+.check-progress {
+    padding: 0 1rem .35rem;
+    font-size: .74rem; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.check-list { list-style: none; margin: 0; padding: 0; }
+
+.check-item {
+    display: flex; align-items: center; gap: .55rem;
+    padding: .1rem .5rem .1rem 1rem;
+}
+
+.check-box {
+    display: grid; place-items: center;
+    width: 20px; height: 20px; flex: none;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 6px;
+    background: none;
+    color: transparent;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+                color var(--dur) var(--ease);
+}
+.check-box .ico { width: .8em; height: .8em; stroke-width: 3; }
+.check-box:hover { border-color: var(--accent); }
+.check-item.is-done .check-box {
+    background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+
+.check-text {
+    flex: 1; min-width: 0;
+    padding: .34em 0;
+    border: 0; background: none;
+    font-size: .92rem;
+}
+.check-text:focus { outline: none; }
+.check-text::placeholder { color: var(--ink-faint); }
+.check-item.is-done .check-text { color: var(--ink-faint); text-decoration: line-through; }
+
+.check-del {
+    display: grid; place-items: center;
+    width: 26px; height: 26px; flex: none;
+    border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--ink-faint);
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.check-del .ico { width: .8em; height: .8em; }
+.check-item:hover .check-del, .check-item:focus-within .check-del { opacity: .7; }
+.check-del:hover { opacity: 1 !important; background: var(--danger-wash); color: var(--danger); }
+/* Touch has no hover, so the control has to stay put. */
+@media (hover: none) { .check-del { opacity: .55; } }
+
+.check-add {
+    display: flex; align-items: center; gap: .4em;
+    margin: .3rem 0 0 1rem;
+    padding: .3em .5em;
+    min-height: 32px;
+    border: 0; background: none;
+    color: var(--accent);
+    font-size: .84rem; font-weight: 550;
+    cursor: pointer;
+    border-radius: var(--r-sm);
+}
+.check-add:hover { background: var(--accent-wash); }
+
 /* ============================================================
    FOCUS VIEW — one note, centred and full height
    ============================================================ */
@@ -806,6 +943,18 @@ a { color: var(--accent); }
     overscroll-behavior: contain;
 }
 .focus-body:focus { outline: none; }
+
+/* The checklist variant of the focus view: same rows, more room. */
+.focus-items {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: .8rem .6rem;
+}
+.focus-items .check-wrap { overflow: visible; max-height: none !important; }
+.focus-items .check-item { padding: .15rem .6rem; }
+.focus-items .check-text { font-size: 1rem; padding: .45em 0; }
+.focus-items .check-add { margin-left: .6rem; }
 
 .focus-foot {
     display: flex; align-items: center; gap: .5rem;
@@ -876,11 +1025,19 @@ a { color: var(--accent); }
 }
 
 .file-main { flex: 1; min-width: 0; }
+/* The name is the rename control — a pencil would be a fourth button in
+   a row that is already tight on a phone. */
 .file-name {
     display: block;
-    font-weight: 550;
+    max-width: 100%;
+    padding: 0; border: 0; background: none;
+    color: inherit;
+    font: inherit; font-weight: 550;
+    text-align: left;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+button.file-name { cursor: pointer; }
+button.file-name:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .file-meta {
     font-size: .78rem;
     color: var(--ink-faint);
@@ -979,23 +1136,76 @@ a { color: var(--accent); }
 
 .modal-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 
+.settings-sub {
+    margin: 1.6rem 0 .7rem;
+    font-family: var(--font-body);
+    font-size: .78rem; font-weight: 700;
+    letter-spacing: .09em; text-transform: uppercase;
+    color: var(--ink-faint);
+}
+.btn-row { display: flex; gap: .45rem; flex-wrap: wrap; }
+code {
+    padding: .1em .35em;
+    border-radius: 4px;
+    background: var(--bg-tint);
+    font-family: var(--font-mono); font-size: .88em;
+}
+
+/* ---- version history ---------------------------------------------- */
+
+.history-list {
+    list-style: none; margin: 0 0 1.2rem; padding: 0;
+    max-height: 46vh; overflow-y: auto;
+    display: grid; gap: .35rem;
+}
+.history-row {
+    display: flex; align-items: center; gap: .7rem;
+    padding: .55rem .7rem .55rem .9rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+}
+.history-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.history-when { font-size: .87rem; }
+.history-delta {
+    font-size: .74rem; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+}
+.history-row:first-child { border-color: var(--accent-soft); background: var(--accent-wash); }
+
 /* ============================================================
    TOAST
    ============================================================ */
 
 .toast {
     position: fixed; left: 50%; bottom: 1.7rem; z-index: 90;
-    max-width: min(30rem, calc(100vw - 2rem));
+    max-width: min(32rem, calc(100vw - 2rem));
     transform: translateX(-50%);
-    padding: .65em 1.2em;
+    display: flex; align-items: center; gap: .8rem;
+    padding: .55em .6em .55em 1.2em;
     background: var(--ink);
     color: var(--bg);
     border-radius: var(--r-pill);
     font-size: .87rem; font-weight: 500;
-    text-align: center;
     box-shadow: var(--shadow-lg);
     animation: toast-in 320ms var(--ease) both;
 }
+#toast-text { flex: 1; min-width: 0; }
+
+/* Undo lives on the toast rather than in a menu, because the moment you
+   want it is the second after the delete. */
+.toast-undo {
+    display: inline-flex; align-items: center; gap: .35em;
+    flex: none;
+    padding: .35em .9em;
+    min-height: 32px;
+    border: 0; border-radius: var(--r-pill);
+    background: var(--bg);
+    color: var(--ink);
+    font-size: .82rem; font-weight: 650;
+    cursor: pointer;
+}
+.toast-undo:hover { background: var(--surface-2); }
 @keyframes toast-in {
     from { opacity: 0; transform: translate(-50%, 12px); }
     to   { opacity: 1; transform: translate(-50%, 0); }
@@ -1017,7 +1227,7 @@ a { color: var(--accent); }
    ============================================================ */
 
 @media (max-width: 860px) {
-    .note-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+    .note-grid { columns: 260px; }
 }
 
 @media (max-width: 720px) {
@@ -1037,8 +1247,12 @@ a { color: var(--accent); }
     .panel-bar { flex-wrap: wrap; }
     .search { max-width: none; flex-basis: 100%; }
     .panel-bar .btn { flex: 1; }
+    .panel-bar .sort { flex-basis: 100%; }
+    .panel-bar .spacer { display: none; }
 
-    .note-grid { grid-template-columns: 1fr; }
+    /* One column: `columns: 1` rather than a width, so a card never gets
+       narrower than the screen on a small phone. */
+    .note-grid { columns: 1; }
 
     .connect-card { flex-wrap: wrap; }
     .connect-card .btn { width: 100%; }
@@ -1082,7 +1296,7 @@ a { color: var(--accent); }
    scaled. Everything typed into holds at 16px here; the visual weight is
    carried by colour and spacing instead. */
 @media (max-width: 720px) {
-    .field input, .search input, .note-title, .note-body,
+    .field input, .search input, .note-title, .note-body, .check-text, .sort,
     .focus-title, .focus-body, #passkey { font-size: 16px; }
     .note-body { line-height: 1.6; }
 }

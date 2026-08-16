@@ -44,5 +44,16 @@ window.DOCKET_CONFIG = {
 
     /* A note taller than this collapses behind an expand control, so one
        pasted file cannot push everything else off the screen. */
-    NOTE_COLLAPSE_PX: 260
+    NOTE_COLLAPSE_PX: 260,
+
+    /* Deleted items sit in the trash this long before being purged on the
+       next load. Long enough to notice a mistake a week later. */
+    TRASH_DAYS: 30,
+
+    /* How long the Undo button stays on a toast, in ms. */
+    UNDO_MS: 8000,
+
+    /* Revisions listed in the history dialog. The gist API returns the
+       lot; showing every save since the beginning is just noise. */
+    HISTORY_LIMIT: 40
 };

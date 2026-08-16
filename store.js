@@ -45,6 +45,10 @@
     let blobRefs = {};
     const blobCache = {};
 
+    /* The gist's own revision list, captured on every load. GitHub keeps
+       one entry per save, which is version history for free. */
+    let lastHistory = [];
+
     const emit = (state, detail) => listeners.forEach((fn) => fn(state, detail));
 
     function readLS(k) {
@@ -107,6 +111,19 @@
 
     /* ---------- load --------------------------------------------------- */
 
+    /* Every collection is optional: a v2 gist has no folders, a v3 gist no
+       trash. Reading defensively is what lets an older docket open in a
+       newer build without a migration step. */
+    function normalise(data) {
+        const arr = (v) => (Array.isArray(v) ? v : []);
+        return {
+            notes: arr(data && data.notes),
+            files: arr(data && data.files),
+            folders: arr(data && data.folders),
+            trash: arr(data && data.trash)
+        };
+    }
+
     async function load() {
         if (!isConnected()) { emit('offline'); return null; }
 
@@ -150,12 +167,9 @@
 
         lastError = null;
         emit('synced');
-        return {
-            notes: Array.isArray(data.notes) ? data.notes : [],
-            files: Array.isArray(data.files) ? data.files : [],
-            /* Absent in v2 documents — an older gist just has no folders. */
-            folders: Array.isArray(data.folders) ? data.folders : []
-        };
+        lastHistory = Array.isArray(json.history) ? json.history : [];
+
+        return normalise(data);
     }
 
     /* ---------- blobs -------------------------------------------------- */
@@ -278,8 +292,35 @@
         if (hasPending() && !lastError) flush();
     }
 
+    /* ---------- version history ---------------------------------------- */
+
+    /* GitHub stamps a revision on every PATCH, so this is history we get
+       without storing anything ourselves. Each entry carries a sha, a
+       timestamp and the line delta of that save. */
+    const history = () => lastHistory.slice(0, CFG.HISTORY_LIMIT).map((h) => ({
+        sha: h.version,
+        at: h.committed_at,
+        added: h.change_status && h.change_status.additions,
+        removed: h.change_status && h.change_status.deletions
+    }));
+
+    /** Read the docket as it was at one revision. Does not restore it —
+     *  the caller decides what to do with what comes back. */
+    async function atVersion(sha) {
+        const res = await fetch(`${api()}/${sha}`, { headers: headers(), cache: 'no-store' });
+        if (!res.ok) throw new Error(describe(res, await readBody(res), 'read'));
+        const json = await res.json();
+        const entry = (json.files || {})[CFG.DATA_FILE];
+        if (!entry) throw new Error('That revision has no docket in it.');
+        const text = entry.truncated && entry.raw_url
+            ? await (await fetch(entry.raw_url, { cache: 'no-store' })).text()
+            : entry.content;
+        return normalise(JSON.parse(text || '{}'));
+    }
+
     window.DocketStore = {
         load, bind, touchData, flush,
+        history, atVersion,
         getBlob, putBlob, dropBlob,
         retry: () => { lastError = null; flush(); },
         onStatus: (fn) => listeners.push(fn),

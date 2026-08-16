@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=3">
+<link rel="stylesheet" href="./style.css?v=4">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -56,6 +56,10 @@
         <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="M17.5 18H7a4 4 0 0 1-.6-8A6 6 0 0 1 16 6.6M3 3l18 18"/></symbol>
         <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
         <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 6a1 1 0 0 1 1-1h4l2 2.5h8a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6Z"/></symbol>
+        <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6.5 5.5 8 8 5M4 12.5 5.5 14 8 11M4 18.5 5.5 20 8 17M11 6.5h9M11 12.5h9M11 18.5h9"/></symbol>
+        <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.5 7.5 3 3"/></symbol>
+        <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h11a5 5 0 0 1 0 10h-6M4 9l4-4M4 9l4 4"/></symbol>
+        <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></symbol>
     </defs>
 </svg>
 
@@ -130,6 +134,15 @@
         <button class="btn btn-primary" type="button" data-act="settings">Connect</button>
     </div>
 
+    <!-- One search box for the whole docket. It filters notes and files at
+         once, and the tab counts become match counts, so you can see which
+         side the hits are on without switching to look. -->
+    <div class="search search-global">
+        <svg class="ico"><use href="#i-search"></use></svg>
+        <label class="sr-only" for="search">Search everything</label>
+        <input type="search" id="search" placeholder="Search notes and files…" spellcheck="false">
+    </div>
+
     <nav class="tabs" role="tablist">
         <button class="tab is-active" data-tab="notes" role="tab" aria-selected="true" aria-controls="panel-notes">
             <svg class="ico"><use href="#i-note"></use></svg>
@@ -139,11 +152,16 @@
             <svg class="ico"><use href="#i-file"></use></svg>
             Files <span class="tab-count" id="count-files">0</span>
         </button>
+        <button class="tab tab-trash" data-tab="trash" role="tab" aria-selected="false"
+                aria-controls="panel-trash" id="tab-trash" hidden>
+            <svg class="ico"><use href="#i-trash"></use></svg>
+            Trash <span class="tab-count" id="count-trash">0</span>
+        </button>
     </nav>
 
     <!-- Folders are shared by both tabs, so the bar lives once, here, and
          filters whichever tab is showing. -->
-    <div class="folder-bar">
+    <div class="folder-bar" id="folder-bar">
         <div id="folder-chips" class="folder-chips" role="tablist" aria-label="Folders"></div>
         <button id="new-folder-btn" class="chip chip-add" type="button">
             <svg class="ico"><use href="#i-plus"></use></svg> Folder
@@ -154,16 +172,31 @@
         <!-- ---------------- NOTES ---------------- -->
         <section id="panel-notes" class="panel is-active" role="tabpanel">
             <div class="panel-bar">
-                <div class="search">
-                    <svg class="ico"><use href="#i-search"></use></svg>
-                    <input type="search" id="note-search" placeholder="Search notes…" spellcheck="false">
-                </div>
+                <label class="sr-only" for="note-sort">Sort notes</label>
+                <select id="note-sort" class="sort">
+                    <option value="updated">Recently updated</option>
+                    <option value="created">Recently created</option>
+                    <option value="title">Title A–Z</option>
+                </select>
+                <span class="spacer"></span>
+                <button id="new-list-btn" class="btn btn-ghost" type="button">
+                    <svg class="ico"><use href="#i-list"></use></svg> New list
+                </button>
                 <button id="new-note-btn" class="btn btn-primary" type="button">
                     <svg class="ico"><use href="#i-plus"></use></svg> New note
                 </button>
             </div>
 
+            <!-- Pinned notes get their own band, so they stay together at the
+                 top instead of being scattered through a masonry flow. -->
+            <div id="pinned-wrap" hidden>
+                <h2 class="band-title"><svg class="ico"><use href="#i-pin"></use></svg> Pinned</h2>
+                <div id="pinned-grid" class="note-grid"></div>
+                <h2 class="band-title" id="others-title">Everything else</h2>
+            </div>
             <div id="note-grid" class="note-grid"></div>
+
+            <p id="note-none" class="hint" hidden>No notes match that search.</p>
 
             <div id="notes-empty" class="empty" hidden>
                 <svg class="ico ico-lg"><use href="#i-note"></use></svg>
@@ -178,10 +211,13 @@
         <!-- ---------------- FILES ---------------- -->
         <section id="panel-files" class="panel" role="tabpanel">
             <div class="panel-bar">
-                <div class="search">
-                    <svg class="ico"><use href="#i-search"></use></svg>
-                    <input type="search" id="file-search" placeholder="Search files…" spellcheck="false">
-                </div>
+                <label class="sr-only" for="file-sort">Sort files</label>
+                <select id="file-sort" class="sort">
+                    <option value="added">Recently added</option>
+                    <option value="name">Name A–Z</option>
+                    <option value="size">Largest first</option>
+                </select>
+                <span class="spacer"></span>
                 <button id="upload-btn" class="btn btn-primary" type="button">
                     <svg class="ico"><use href="#i-upload"></use></svg> Upload
                 </button>
@@ -195,7 +231,20 @@
             </div>
 
             <ul id="file-list" class="file-list"></ul>
+            <p id="file-none" class="hint" hidden>No files match that search.</p>
             <p id="file-note" class="storage-text file-note"></p>
+        </section>
+
+        <!-- ---------------- TRASH ---------------- -->
+        <section id="panel-trash" class="panel" role="tabpanel">
+            <div class="panel-bar">
+                <p class="hint" id="trash-lede"></p>
+                <span class="spacer"></span>
+                <button id="empty-trash-btn" class="btn btn-ghost" type="button">
+                    <svg class="ico"><use href="#i-trash"></use></svg> Empty trash
+                </button>
+            </div>
+            <ul id="trash-list" class="file-list"></ul>
         </section>
     </main>
 
@@ -219,6 +268,7 @@
         </header>
         <textarea id="focus-body" class="focus-body" spellcheck="false"
                   placeholder="Start typing…" aria-label="Note body"></textarea>
+        <div id="focus-items" class="focus-items" hidden></div>
         <footer class="focus-foot">
             <span id="focus-meta" class="focus-meta"></span>
             <span class="spacer"></span>
@@ -263,8 +313,34 @@
             <dt>Files</dt><dd id="fact-files">—</dd>
         </dl>
 
-        <p class="hint hint-block">Both values stay in this browser's localStorage and are
-           never committed or sent anywhere but GitHub.</p>
+        <h3 class="settings-sub">Backup</h3>
+        <div class="btn-row">
+            <button id="export-json-btn" class="btn btn-ghost btn-sm" type="button">
+                <svg class="ico"><use href="#i-download"></use></svg> Export .json
+            </button>
+            <button id="export-txt-btn" class="btn btn-ghost btn-sm" type="button">
+                <svg class="ico"><use href="#i-download"></use></svg> Export .txt
+            </button>
+            <button id="import-btn" class="btn btn-ghost btn-sm" type="button">
+                <svg class="ico"><use href="#i-upload"></use></svg> Import .json
+            </button>
+            <input type="file" id="import-input" accept="application/json,.json" hidden>
+        </div>
+        <p class="hint hint-block">The <code>.json</code> is a complete backup and can be
+           imported again. The <code>.txt</code> is for reading — every note one after
+           another — and cannot be imported.</p>
+
+        <h3 class="settings-sub">History</h3>
+        <div class="btn-row">
+            <button id="history-btn" class="btn btn-ghost btn-sm" type="button">
+                <svg class="ico"><use href="#i-clock"></use></svg> Version history
+            </button>
+        </div>
+        <p class="hint hint-block">Every save GitHub keeps as a gist revision. You can look
+           back through them and restore one.</p>
+
+        <p class="hint hint-block">Your token and gist id stay in this browser's
+           localStorage and are never committed or sent anywhere but GitHub.</p>
 
         <div class="modal-actions">
             <button id="reload-btn" class="btn btn-ghost btn-sm" type="button">
@@ -273,6 +349,19 @@
             <span class="spacer"></span>
             <button id="settings-cancel" class="btn btn-ghost" type="button">Cancel</button>
             <button id="settings-save" class="btn btn-primary" type="button">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="history-modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Version history">
+        <h2>Version history</h2>
+        <p class="modal-lede">Every save is a gist revision. Restoring replaces what is here
+           now — and because the restore is itself a save, it is undoable from this list too.</p>
+        <ul id="history-list" class="history-list"></ul>
+        <div class="modal-actions">
+            <span class="spacer"></span>
+            <button id="history-close" class="btn btn-ghost" type="button">Close</button>
         </div>
     </div>
 </div>
@@ -296,6 +385,22 @@
     </div>
 </div>
 
+<!-- Generic single-field prompt: renaming folders and files both use it. -->
+<div id="prompt-modal" class="modal" hidden>
+    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
+        <h2 id="prompt-title">Rename</h2>
+        <div class="field">
+            <label id="prompt-label" for="prompt-input">Name</label>
+            <input type="text" id="prompt-input" maxlength="200" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="modal-actions">
+            <span class="spacer"></span>
+            <button id="prompt-cancel" class="btn btn-ghost" type="button">Cancel</button>
+            <button id="prompt-ok" class="btn btn-primary" type="button">Save</button>
+        </div>
+    </div>
+</div>
+
 <div id="confirm-modal" class="modal" hidden>
     <div class="modal-card modal-sm" role="dialog" aria-modal="true">
         <h2 id="confirm-title">Are you sure?</h2>
@@ -308,10 +413,15 @@
     </div>
 </div>
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" hidden>
+    <span id="toast-text"></span>
+    <button id="toast-undo" class="toast-undo" type="button" hidden>
+        <svg class="ico"><use href="#i-undo"></use></svg> Undo
+    </button>
+</div>
 
-<script src="./config.js?v=3"></script>
-<script src="./store.js?v=3"></script>
-<script src="./app.js?v=3"></script>
+<script src="./config.js?v=4"></script>
+<script src="./store.js?v=4"></script>
+<script src="./app.js?v=4"></script>
 </body>
 </html>

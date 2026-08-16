@@ -34,8 +34,21 @@ uploads wait until you have connected one.
 
 ## What it does
 
-**Notes.** Any number of independent titled boxes. They autosave about a
-second after you stop typing, can be pinned, and are searchable.
+**Notes.** Any number of independent titled boxes, plain text or checklist.
+They autosave about a second after you stop typing, and can be sorted by
+recently updated, recently created or title.
+
+Leave the title blank and the card borrows its first line — shown only, never
+written back, so typing a real title still just works.
+
+**Pinning.** Pinned notes are lifted into their own band at the top, newest
+pin first, as many as you like. Pinning deliberately does *not* touch the
+updated stamp: it is not an edit, and a note you merely pinned should not
+jump to the front of a recently-updated sort.
+
+The board is laid out as masonry rather than a grid. A grid puts cards in
+rows and makes every row as tall as its tallest card, so a two-line note
+beside a sixty-line one leaves a dead band of whitespace beneath it.
 
 A long note does not take over the page. Anything past ~260px collapses
 behind an **Expand · N lines** control, and expanding opens the note centred
@@ -49,9 +62,29 @@ file's contents straight to the clipboard.
 
 **Folders.** One shared set across both tabs, as a scrolling chip bar under
 the tabs: `All`, each folder with its count, and `Unfiled`. The counts follow
-whichever tab you are on. Create one with **+ Folder**, delete one with the ×
-on its chip, and move an item with the folder button on a note's footer or in
-a file's meta line. Anything made while a folder is selected lands in it.
+whichever tab you are on. Create one with **+ Folder**, rename or delete one
+with the controls on its chip, and move an item with the folder button on a
+note's footer or in a file's meta line. Anything made while a folder is
+selected lands in it.
+
+**Search** is one box for the whole docket. It filters notes and files at
+once — including inside checklist items — and the tab counts become match
+counts, so you can see which side the hits are on without switching.
+
+**Trash.** Deleting a note or file moves it to the trash and offers Undo on
+the spot. A Trash tab appears while anything is in it, with Restore and
+Delete forever; everything is purged automatically after 30 days. A trashed
+file keeps its blob in the gist until then — there would be nothing to
+restore otherwise, and emptying the trash is what actually reclaims the
+space.
+
+**Backup.** Settings → Backup exports the whole docket as `.json` (a complete
+backup, re-importable) or `.txt` (every note laid out for reading, not
+importable — it says so at the top). Import asks before replacing anything.
+
+**Version history.** GitHub stamps a revision on every save, so Settings →
+Version history lists them with their line deltas and restores any one. The
+restore is itself a save, so it lands in the same list and is undoable.
 
 A folder is only a label — membership is one `folder` id on the item — so
 deleting a folder never deletes what was in it. Its contents fall back to
@@ -72,8 +105,8 @@ app.js       notes, files, focus view, tabs, modals, rendering
 ### Storage layout
 
 ```
-docket share.json     notes + file metadata + folders   rewritten on every edit
-docket-blob-<id>      one file per upload               written only when that file changes
+docket share.json     notes + file metadata + folders + trash   rewritten on every edit
+docket-blob-<id>      one file per upload                       written only when that file changes
 ```
 
 One gist file per upload, rather than one big JSON of them, because of how
