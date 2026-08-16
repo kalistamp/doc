@@ -935,11 +935,17 @@ a { color: var(--accent); }
     font-size: .88rem;
     line-height: 1.65;
     tab-size: 4;
-    /* Here there IS room, so code keeps its real line breaks and scrolls
-       sideways rather than wrapping — alignment survives. The phone
-       override below flips this back to wrapping. */
-    white-space: pre;
-    overflow: auto;
+    /* Wrap, everywhere. Scrolling sideways preserves a code line's real
+       shape, but it also means half of every long line sits off-screen
+       and you read with one hand on the scrollbar — which defeats the
+       point of a view whose whole job is making a long note readable.
+       pre-wrap keeps the indentation; break-word handles the single
+       unbroken token (a URL, a minified line) that would otherwise still
+       push the box sideways. */
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    overflow-x: hidden;
+    overflow-y: auto;
     overscroll-behavior: contain;
 }
 .focus-body:focus { outline: none; }
@@ -1278,14 +1284,9 @@ code {
     }
     .focus-head { padding: .7rem .6rem .7rem 1rem; }
     .focus-title { font-size: 1.12rem; }
-    /* No room to scroll sideways on a phone — wrap instead, or half of
-       every code line is unreachable. */
-    .focus-body {
-        padding: 1rem; font-size: .84rem;
-        white-space: pre-wrap;
-        overflow-wrap: break-word;
-        overflow-x: hidden;
-    }
+    /* Wrapping is set once on .focus-body now, for every width — this
+       block only tightens the spacing for a phone. */
+    .focus-body { padding: 1rem; font-size: .84rem; }
     /* Plain padding here sits under the iOS home indicator. */
     .focus-foot { padding: .6rem .8rem max(.6rem, env(safe-area-inset-bottom)); }
 

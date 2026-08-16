@@ -52,9 +52,14 @@ beside a sixty-line one leaves a dead band of whitespace beneath it.
 
 A long note does not take over the page. Anything past ~260px collapses
 behind an **Expand · N lines** control, and expanding opens the note centred
-and full height — monospaced, its own scrollbar, Tab indenting instead of
-tabbing away. That view is where a pasted thousand-line file is actually
-readable, and on a phone it becomes a full-screen sheet.
+and full height — monospaced, wrapped, Tab indenting instead of tabbing away.
+That view is where a pasted thousand-line file is actually readable, and on a
+phone it becomes a full-screen sheet.
+
+Lines wrap at every width rather than scrolling sideways. Preserving a code
+line's real shape sounds better than it reads: it puts half of every long
+line off-screen and leaves you working the scrollbar, which defeats the point
+of a view that exists to make a long note legible. Indentation survives.
 
 **Files.** Drag and drop or browse. Each upload becomes its own file inside
 the gist, so it comes back down on any machine — download it, or copy a text
