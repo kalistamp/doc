@@ -46,6 +46,11 @@ window.DOCKET_CONFIG = {
        pasted file cannot push everything else off the screen. */
     NOTE_COLLAPSE_PX: 260,
 
+    /* The same ceiling in the compact view. Low enough that a phone shows
+       several notes at once — which is the only reason that view exists —
+       and still tall enough to read a few lines and know what a note is. */
+    NOTE_COMPACT_PX: 118,
+
     /* Deleted items sit in the trash this long before being purged on the
        next load. Long enough to notice a mistake a week later. */
     TRASH_DAYS: 30,

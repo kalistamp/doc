@@ -30,7 +30,8 @@
     const LS = {
         notes: 'docket.notes', files: 'docket.files', folders: 'docket.folders',
         trash: 'docket.trash', active: 'docket.activeFolder',
-        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort'
+        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort',
+        noteView: 'docket.noteView'
     };
 
     let notes = [];
@@ -46,6 +47,14 @@
        base36 only. */
     const UNFILED = '__unfiled__';
     let activeFolder = null;
+
+    /* How much of each note the board shows: the full card, a shorter
+       card, or a two-line row. Kept in localStorage and NOT in the gist —
+       like the theme, it is a property of the screen you are looking at,
+       and syncing it would have a phone and a desktop overwrite each
+       other's choice all day. */
+    const VIEWS = ['cards', 'compact', 'list'];
+    let noteView = 'cards';
 
     /* ============================================================
        HELPERS
@@ -143,6 +152,8 @@
             activeFolder = localStorage.getItem(LS.active) || null;
             el('note-sort').value = localStorage.getItem(LS.noteSort) || 'updated';
             el('file-sort').value = localStorage.getItem(LS.fileSort) || 'added';
+            const view = localStorage.getItem(LS.noteView);
+            if (VIEWS.includes(view)) noteView = view;
         } catch (e) {}
     }
 
@@ -586,6 +597,33 @@
         return { pinned, rest, total: visible.length };
     }
 
+    /* ---- view: cards / compact / list ---------------------------------- */
+
+    function setNoteView(view) {
+        if (!VIEWS.includes(view) || view === noteView) return;
+        noteView = view;
+        try { localStorage.setItem(LS.noteView, view); } catch (e) {}
+        renderNotes();
+    }
+
+    /* Both grids carry the view as a class, so the whole difference between
+       compact and cards is CSS; only the list swaps the markup out. */
+    function paintView() {
+        document.querySelectorAll('#view-switch [data-view]').forEach((b) => {
+            const on = b.dataset.view === noteView;
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-pressed', String(on));
+        });
+        ['pinned-grid', 'note-grid'].forEach((id) => {
+            el(id).className = `note-grid view-${noteView}`;
+        });
+    }
+
+    el('view-switch').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-view]');
+        if (btn) setNoteView(btn.dataset.view);
+    });
+
     function noteCard(n) {
         const derived = !((n.title || '').trim()) && derivedTitle(n);
         const body = isList(n) ? checklistMarkup(n) : `
@@ -654,8 +692,59 @@
             </div>`;
     }
 
+    /* The list row: a title, a meta line, and no editor at all. There is no
+       room in two lines for a textarea, so opening a row goes straight to
+       the focus view — which is the better place to write anyway, and on a
+       phone it is a full-screen sheet.
+
+       The stamp keeps its own span rather than being baked into the meta
+       string, because the minute tick rewrites that element's text and
+       would otherwise wipe the line count and folder along with it. */
+    function noteRow(n) {
+        const bits = [];
+        if (isList(n)) {
+            const items = n.items || [];
+            bits.push(`${items.filter((i) => i.done).length}/${items.length} done`);
+        } else {
+            const lines = lineCount(n.body);
+            if (lines) bits.push(`${lines.toLocaleString()} line${lines === 1 ? '' : 's'}`);
+        }
+        if (n.folder) bits.push(folderName(n.folder));
+
+        return `
+            <article class="note note-row${n.pinned ? ' is-pinned' : ''}" data-id="${n.id}">
+                <button class="row-open" type="button" aria-label="Open ${esc(titleOf(n))}">
+                    <span class="row-icon" aria-hidden="true">
+                        <svg class="ico"><use href="#i-${isList(n) ? 'list' : 'note'}"></use></svg>
+                    </span>
+                    <span class="row-main">
+                        <span class="row-title">${esc(titleOf(n))}</span>
+                        <span class="row-meta"><span class="note-stamp">${esc(relTime(n.updated))}</span>${
+                            bits.length ? ` · ${esc(bits.join(' · '))}` : ''}</span>
+                    </span>
+                </button>
+                <div class="row-acts">
+                    <button class="note-act note-folder${n.folder ? ' is-set' : ''}" type="button"
+                            title="${n.folder ? `In “${esc(folderName(n.folder))}” — move` : 'Move to a folder'}"
+                            aria-label="Move to folder">
+                        <svg class="ico"><use href="#i-folder"></use></svg>
+                    </button>
+                    <button class="note-act act-pin${n.pinned ? ' is-on' : ''}" type="button"
+                            title="${n.pinned ? 'Unpin' : 'Pin to top'}"
+                            aria-label="${n.pinned ? 'Unpin note' : 'Pin note'}">
+                        <svg class="ico"><use href="#i-pin"></use></svg>
+                    </button>
+                    <button class="note-act act-del" type="button" title="Delete note"
+                            aria-label="Delete note">
+                        <svg class="ico"><use href="#i-trash"></use></svg>
+                    </button>
+                </div>
+            </article>`;
+    }
+
     function renderNotes() {
         const { pinned, rest, total } = splitNotes();
+        paintView();
 
         el('count-notes').textContent = query()
             ? `${total}` : `${notes.length}`;
@@ -664,8 +753,11 @@
 
         el('pinned-wrap').hidden = pinned.length === 0;
         el('others-title').hidden = rest.length === 0;
-        el('pinned-grid').innerHTML = pinned.map(noteCard).join('');
-        el('note-grid').innerHTML = rest.map(noteCard).join('');
+        const shape = noteView === 'list' ? noteRow : noteCard;
+        el('pinned-grid').innerHTML = pinned.map(shape).join('');
+        el('note-grid').innerHTML = rest.map(shape).join('');
+
+        if (noteView === 'list') return;   /* a row has no body to fill or size */
 
         /* Bodies are assigned, not interpolated into the markup. The HTML
            parser drops a leading newline inside <textarea>, so a note that
@@ -680,13 +772,15 @@
         });
     }
 
-    /* Grow a card to fit its content, but only up to NOTE_COLLAPSE_PX.
-       Past that it clamps and grows an Expand control instead — one
-       pasted file should not push every other note off the screen. */
+    /* Grow a card to fit its content, but only up to the ceiling for the
+       current view. Past that it clamps and grows an Expand control
+       instead — one pasted file should not push every other note off the
+       screen. A list row has neither body nor ceiling, so it exits here. */
     function sizeCard(card) {
         const n = findNote(card.dataset.id);
-        if (!n) return;
-        const limit = CFG.NOTE_COLLAPSE_PX;
+        if (!n || card.classList.contains('note-row')) return;
+        const compact = noteView === 'compact';
+        const limit = compact ? CFG.NOTE_COMPACT_PX : CFG.NOTE_COLLAPSE_PX;
         let clamped;
 
         if (isList(n)) {
@@ -699,7 +793,9 @@
             ta.style.height = 'auto';
             const full = ta.scrollHeight;
             clamped = full > limit;
-            ta.style.height = `${clamped ? limit : Math.max(full, 96)}px`;
+            /* An empty note still needs somewhere to click; the floor drops
+               in compact, where a card of blank space defeats the point. */
+            ta.style.height = `${clamped ? limit : Math.max(full, compact ? 52 : 96)}px`;
         }
 
         card.classList.toggle('is-clamped', clamped);
@@ -743,6 +839,12 @@
         notes.unshift(note);
         renderNotes();
         commit();
+
+        /* A list row has nothing to type into, so a note made there opens
+           in the focus view instead — otherwise "New note" would appear to
+           do nothing but add an empty line. */
+        if (noteView === 'list') { openFocus(note.id); return; }
+
         /* A brand new note is never pinned, so it is the first card in the
            unpinned grid — focus its title so you can just start typing. */
         const first = el('note-grid').querySelector('.note-title');
@@ -801,7 +903,7 @@
             addChecklistItem(note, card);
         } else if (e.target.closest('.note-folder')) {
             openFolderModal({ kind: 'note', id: note.id });
-        } else if (e.target.closest('.note-expand')) {
+        } else if (e.target.closest('.note-expand') || e.target.closest('.row-open')) {
             openFocus(note.id);
         } else if (e.target.closest('.act-pin')) {
             note.pinned = !note.pinned;
@@ -1570,7 +1672,8 @@
         if (el('panel-notes').contains(document.activeElement)) return;
         document.querySelectorAll('.note').forEach((card) => {
             const note = findNote(card.dataset.id);
-            if (note) card.querySelector('.note-stamp').textContent = relTime(note.updated);
+            const stamp = card.querySelector('.note-stamp');
+            if (note && stamp) stamp.textContent = relTime(note.updated);
         });
     }, 60000);
 

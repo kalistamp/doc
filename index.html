@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=5">
+<link rel="stylesheet" href="./style.css?v=6">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -60,6 +60,11 @@
         <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.5 7.5 3 3"/></symbol>
         <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h11a5 5 0 0 1 0 10h-6M4 9l4-4M4 9l4 4"/></symbol>
         <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></symbol>
+        <!-- The three board shapes. Deliberately unlike #i-list, which is a
+             checklist and means "new list", not "list view". -->
+        <symbol id="i-view-cards" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="9" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="5.5" rx="1.5"/><rect x="4" y="16" width="6.5" height="4" rx="1.5"/><rect x="13.5" y="12.5" width="6.5" height="7.5" rx="1.5"/></symbol>
+        <symbol id="i-view-compact" viewBox="0 0 24 24"><rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/></symbol>
+        <symbol id="i-view-list" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
     </defs>
 </svg>
 
@@ -178,6 +183,28 @@
                     <option value="created">Recently created</option>
                     <option value="title">Title A–Z</option>
                 </select>
+
+                <!-- How much of each note the board shows. A per-device
+                     choice, like the theme: a phone wants rows where a
+                     desktop wants the full board. -->
+                <div class="viewswitch" id="view-switch" role="group" aria-label="Note view">
+                    <button class="viewswitch-btn" type="button" data-view="cards"
+                            title="Cards — the whole note" aria-pressed="false">
+                        <svg class="ico"><use href="#i-view-cards"></use></svg>
+                        <span class="viewswitch-label">Cards</span>
+                    </button>
+                    <button class="viewswitch-btn" type="button" data-view="compact"
+                            title="Compact — shorter cards, more of them" aria-pressed="false">
+                        <svg class="ico"><use href="#i-view-compact"></use></svg>
+                        <span class="viewswitch-label">Compact</span>
+                    </button>
+                    <button class="viewswitch-btn" type="button" data-view="list"
+                            title="List — one line each, tap to open" aria-pressed="false">
+                        <svg class="ico"><use href="#i-view-list"></use></svg>
+                        <span class="viewswitch-label">List</span>
+                    </button>
+                </div>
+
                 <span class="spacer"></span>
                 <button id="new-list-btn" class="btn btn-ghost" type="button">
                     <svg class="ico"><use href="#i-list"></use></svg> New list
@@ -420,8 +447,8 @@
     </button>
 </div>
 
-<script src="./config.js?v=5"></script>
-<script src="./store.js?v=5"></script>
-<script src="./app.js?v=5"></script>
+<script src="./config.js?v=6"></script>
+<script src="./store.js?v=6"></script>
+<script src="./app.js?v=6"></script>
 </body>
 </html>

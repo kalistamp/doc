@@ -615,6 +615,36 @@ a { color: var(--accent); }
 .sort:hover { border-color: var(--line-strong); color: var(--ink); }
 .sort:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
 
+/* The view switcher: cards / compact / list.
+   ------------------------------------------------------------------
+   A segmented pill rather than a second <select>, because all three
+   options fit on screen at once — switching views is a thing you do by
+   eye and undo immediately if it was not what you wanted, and a dropdown
+   hides two of the three behind a tap. The labels drop away on a narrow
+   screen and the icons carry it. */
+.viewswitch {
+    display: inline-flex; align-items: center; gap: 2px;
+    flex: none;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-pill);
+    background: var(--surface);
+}
+.viewswitch-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .4em;
+    padding: .3em .7em;
+    min-height: 32px;
+    border: 0; border-radius: var(--r-pill);
+    background: none;
+    color: var(--ink-faint);
+    font-size: .8rem; font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.viewswitch-btn:hover { background: var(--bg-tint); color: var(--ink); }
+.viewswitch-btn.is-on { background: var(--accent-wash); color: var(--accent); }
+
 .search {
     position: relative;
     flex: 1; max-width: 380px;
@@ -802,6 +832,92 @@ a { color: var(--accent); }
 .note-act.act-del:hover { background: var(--danger-wash); color: var(--danger); }
 .note-act.is-working { color: var(--accent); pointer-events: none; }
 .note-act.is-working .ico { animation: spin 1s linear infinite; }
+
+/* ============================================================
+   NOTE VIEWS — compact and list
+
+   Three shapes for the same board, picked per device and remembered in
+   localStorage. Cards is the masonry above. Compact is the same card
+   with a lower ceiling and tighter spacing. List drops the inline
+   editor altogether for a two-line row.
+
+   The list exists mostly for a phone: at one column a single long note
+   fills the screen, and finding the note you actually want turns into a
+   scroll. Rows put twenty notes where one card was, and open into the
+   focus view — the better place to write on a phone anyway.
+   ============================================================ */
+
+/* ---- compact ------------------------------------------------------ */
+
+.note-grid.view-compact { columns: 240px; column-gap: .85rem; }
+.view-compact .note { margin-bottom: .85rem; }
+.view-compact .note-title { padding: .65rem .8rem .15rem; font-size: 1rem; }
+.view-compact .note-body { padding: .15rem .8rem .55rem; font-size: .88rem; line-height: 1.5; }
+.view-compact .note-fade { height: 44px; }
+.view-compact .note-expand { min-height: 32px; padding: .3rem .8rem; font-size: .78rem; }
+.view-compact .note-foot { padding: .25rem .35rem .25rem .8rem; }
+.view-compact .note-act { width: 30px; height: 30px; }
+.view-compact .check-item { padding-left: .8rem; }
+.view-compact .check-progress { padding-left: .8rem; }
+
+/* ---- list --------------------------------------------------------- */
+
+/* `columns: auto` unwinds the masonry: rows are full width and stack. */
+.note-grid.view-list { columns: auto; }
+
+.view-list .note { flex-direction: row; align-items: stretch; margin-bottom: .5rem; }
+.view-list .note:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+
+/* The pinned hairline turns on its side — along the leading edge of a
+   row rather than the top of a card. */
+.view-list .note.is-pinned::before {
+    width: 3px; height: auto;
+    background: linear-gradient(180deg, var(--accent), var(--accent-soft));
+}
+
+.row-open {
+    display: flex; align-items: center; gap: .8rem;
+    flex: 1; min-width: 0;
+    padding: .6rem .3rem .6rem .9rem;
+    border: 0; background: none;
+    text-align: left;
+    cursor: pointer;
+}
+.row-icon {
+    display: grid; place-items: center;
+    width: 32px; height: 32px; flex: none;
+    border-radius: 9px;
+    background: var(--accent-wash);
+    color: var(--accent);
+}
+.row-main { flex: 1; min-width: 0; }
+
+/* Both lines are single-line and ellipsised: a row that grows to fit its
+   title is no longer a row, and the point here is a predictable height
+   you can scan down. */
+.row-title {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 1.02rem; font-weight: 500; letter-spacing: -.01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row-meta {
+    display: block;
+    font-size: .74rem; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row-open:hover .row-title { color: var(--accent); }
+
+.row-acts { display: flex; align-items: center; gap: .1rem; flex: none; padding-right: .35rem; }
+
+/* The folder control is a pill with a label on a card; in a row there is
+   no width for the name, so it becomes another square icon and the name
+   moves to the meta line. */
+.note-row .note-folder {
+    width: 34px; height: 34px; max-width: none;
+    padding: 0; border-radius: var(--r-sm);
+}
 
 /* ---- band titles (Pinned / Everything else) ---------------------- */
 
@@ -1232,8 +1348,17 @@ code {
    RESPONSIVE
    ============================================================ */
 
+/* The switcher loses its labels before the panel bar gets tight — three
+   words plus a sort select plus two buttons is more than one row holds,
+   and the icons are the part that reads at a glance anyway. */
+@media (max-width: 980px) {
+    .viewswitch-label { display: none; }
+    .viewswitch-btn { padding: .3em .55em; }
+}
+
 @media (max-width: 860px) {
     .note-grid { columns: 260px; }
+    .note-grid.view-compact { columns: 210px; }
 }
 
 @media (max-width: 720px) {
@@ -1252,13 +1377,29 @@ code {
 
     .panel-bar { flex-wrap: wrap; }
     .search { max-width: none; flex-basis: 100%; }
-    .panel-bar .btn { flex: 1; }
-    .panel-bar .sort { flex-basis: 100%; }
     .panel-bar .spacer { display: none; }
 
+    /* Two rows: the sort and the view switcher share the first, the actions
+       take the second. The break is explicit — a zero-height full-width
+       item after the switcher — because leaving it to flex-wrap puts one
+       button up beside the sort on some phone widths and not others.
+       `order` is what places it: the buttons follow it in the markup. */
+    .panel-bar::after { content: ''; flex: 0 0 100%; height: 0; margin: -.35rem 0; }
+    .panel-bar .btn { flex: 1; order: 1; }
+    .panel-bar .sort { flex: 1 1 9rem; min-width: 0; }
+
     /* One column: `columns: 1` rather than a width, so a card never gets
-       narrower than the screen on a small phone. */
-    .note-grid { columns: 1; }
+       narrower than the screen on a small phone. Compact needs saying
+       again — its own rule is more specific and would otherwise keep
+       two columns on a phone. */
+    .note-grid, .note-grid.view-compact { columns: 1; }
+
+    /* The list earns its keep on a phone, so it tightens further here —
+       every row saved is a row you do not have to scroll past. */
+    .view-list .note { margin-bottom: .4rem; }
+    .row-open { gap: .65rem; padding: .55rem .25rem .55rem .75rem; }
+    .row-icon { width: 28px; height: 28px; }
+    .row-acts { padding-right: .25rem; }
 
     .connect-card { flex-wrap: wrap; }
     .connect-card .btn { width: 100%; }
@@ -1300,6 +1441,10 @@ code {
     .field input, .search input, .note-title, .note-body, .check-text, .sort,
     .focus-title, .focus-body, #passkey { font-size: 16px; }
     .note-body { line-height: 1.6; }
+    /* Compact takes the body down a step at desktop width. It cannot here:
+       a more specific selector would beat the rule above and hand iOS a
+       14px field to zoom into. The tighter line height still applies. */
+    .view-compact .note-body { font-size: 16px; line-height: 1.5; }
 }
 
 @media (max-width: 400px) {
