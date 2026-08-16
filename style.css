@@ -121,13 +121,14 @@
    and the empty state. It only works because of this rule: `hidden` gets
    its display:none from the UA stylesheet, and ANY author `display:` beats
    the UA origin no matter how weak the selector — so `.modal{display:grid}`
-   would otherwise pin both modals permanently open. */
+   would otherwise pin every modal permanently open. */
 [hidden] { display: none !important; }
 
-html, body { height: 100%; }
+html { -webkit-text-size-adjust: 100%; }
 
 body {
     margin: 0;
+    min-height: 100%;
     background: var(--bg);
     color: var(--ink);
     font-family: var(--font-body);
@@ -135,12 +136,22 @@ body {
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    overflow-wrap: break-word;
 }
+
+/* Set while the focus view is open, so the page behind it cannot scroll
+   away under your thumb on a phone. */
+body.is-locked { overflow: hidden; }
 
 h1, h2, h3 { font-family: var(--font-display); font-weight: 500; margin: 0; letter-spacing: -.01em; }
 h1 em, h2 em { font-style: italic; color: var(--accent); }
 
 button, input, textarea, select { font: inherit; color: inherit; }
+
+/* iOS zooms the page in whenever a focused field is under 16px. Every
+   field the user types into therefore holds at 16px on small screens
+   (see the media query at the foot of this sheet). */
+input, textarea { font-size: 1rem; }
 
 a { color: var(--accent); }
 
@@ -152,8 +163,7 @@ a { color: var(--accent); }
 .spacer { flex: 1; }
 
 /* Icons are stroked outlines from the inline sprite. Setting stroke on the
-   <svg> and fill:none once here means every symbol only has to carry path
-   geometry. */
+   <svg> and fill:none once here means every symbol only carries geometry. */
 .ico {
     width: 1.05em; height: 1.05em;
     fill: none;
@@ -178,8 +188,9 @@ a { color: var(--accent); }
    ============================================================ */
 
 .btn {
-    display: inline-flex; align-items: center; gap: .5em;
+    display: inline-flex; align-items: center; justify-content: center; gap: .5em;
     padding: .58em 1.05em;
+    min-height: 40px;                 /* comfortable touch target */
     border: 1px solid transparent;
     border-radius: var(--r-pill);
     background: transparent;
@@ -188,12 +199,11 @@ a { color: var(--accent); }
     cursor: pointer;
     white-space: nowrap;
     transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
-                border-color var(--dur) var(--ease), transform 120ms var(--ease),
-                box-shadow var(--dur) var(--ease);
+                border-color var(--dur) var(--ease), transform 120ms var(--ease);
 }
 .btn:active { transform: translateY(1px); }
-.btn-sm { padding: .35em .8em; font-size: .84rem; }
-.btn-block { width: 100%; justify-content: center; }
+.btn-sm { padding: .35em .8em; min-height: 34px; font-size: .84rem; }
+.btn-block { width: 100%; }
 
 .btn-primary {
     background: var(--accent);
@@ -213,7 +223,7 @@ a { color: var(--accent); }
 
 .icon-btn {
     display: inline-grid; place-items: center;
-    width: 36px; height: 36px;
+    width: 38px; height: 38px;
     border: 1px solid transparent;
     border-radius: var(--r-pill);
     background: transparent;
@@ -350,13 +360,15 @@ a { color: var(--accent); }
     color: var(--on-accent);
     font-size: 1rem;
     box-shadow: var(--shadow-sm);
+    flex: none;
 }
 
-.topbar-right { margin-left: auto; display: flex; align-items: center; gap: .3rem; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: .2rem; }
 
 .sync-pill {
     display: inline-flex; align-items: center; gap: .45em;
     padding: .38em .9em;
+    min-height: 34px;
     margin-right: .35rem;
     border: 1px solid var(--line);
     border-radius: var(--r-pill);
@@ -364,16 +376,18 @@ a { color: var(--accent); }
     color: var(--ink-soft);
     font-size: .8rem; font-weight: 550;
     cursor: pointer;
+    white-space: nowrap;
     transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .sync-pill:hover { border-color: var(--line-strong); color: var(--ink); }
-.sync-pill.is-synced { color: var(--success); }
-.sync-pill.is-error  { color: var(--danger); border-color: var(--danger); }
+.sync-pill.is-synced  { color: var(--success); }
+.sync-pill.is-offline { color: var(--ink-faint); }
+.sync-pill.is-error   { color: var(--danger); border-color: var(--danger); }
 .sync-pill.is-busy .ico { animation: spin 1.1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg) } }
 
 /* ============================================================
-   ERROR BANNER
+   BANNER + CONNECT CARD
    ============================================================ */
 
 .banner {
@@ -386,12 +400,29 @@ a { color: var(--accent); }
     color: var(--ink);
     font-size: .88rem;
 }
-.banner .ico { color: var(--danger); }
-.banner span { flex: 1; }
+.banner > .ico { color: var(--danger); }
+.banner span { flex: 1; min-width: 0; }
 .banner-x {
-    border: 0; background: none; padding: 0 .2em;
-    color: var(--ink-soft); font-size: 1.3rem; line-height: 1; cursor: pointer;
+    display: grid; place-items: center;
+    width: 30px; height: 30px; flex: none;
+    border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--ink-soft);
+    cursor: pointer;
 }
+.banner-x:hover { background: var(--bg-tint); color: var(--ink); }
+
+.connect-card {
+    display: flex; align-items: center; gap: 1rem;
+    padding: 1rem 1.15rem;
+    margin-bottom: 1.2rem;
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-soft);
+    border-radius: var(--r-md);
+}
+.connect-card > .ico-lg { color: var(--accent); flex: none; }
+.connect-main { flex: 1; min-width: 0; }
+.connect-card h3 { font-size: 1.06rem; }
+.connect-card p { margin: .2rem 0 0; font-size: .86rem; color: var(--ink-soft); }
 
 /* ============================================================
    TABS
@@ -406,6 +437,7 @@ a { color: var(--accent); }
 .tab {
     display: inline-flex; align-items: center; gap: .5em;
     padding: .65em 1.05em;
+    min-height: 44px;
     border: 0; border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     background: none;
@@ -452,6 +484,7 @@ a { color: var(--accent); }
 .search input {
     width: 100%;
     padding: .58em .9em .58em 2.5em;
+    min-height: 40px;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--r-pill);
@@ -463,7 +496,7 @@ a { color: var(--accent); }
     border-color: var(--accent);
     box-shadow: 0 0 0 4px var(--accent-wash);
 }
-/* The native clear affordance is a dark X that disappears in dark mode. */
+/* The native clear affordance is a dark X that vanishes in dark mode. */
 .search input::-webkit-search-cancel-button { filter: grayscale(1) opacity(.55); }
 
 /* ============================================================
@@ -484,8 +517,7 @@ a { color: var(--accent); }
     border-radius: var(--r-md);
     box-shadow: var(--shadow-sm);
     overflow: hidden;
-    transition: box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease),
-                transform var(--dur) var(--ease);
+    transition: box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
     animation: rise 380ms var(--ease) both;
 }
 .note:focus-within {
@@ -513,28 +545,69 @@ a { color: var(--accent); }
 .note-title::placeholder { color: var(--ink-faint); font-style: italic; }
 .note-title:focus { outline: none; }
 
+.note-bodywrap { position: relative; }
+
 .note-body {
+    display: block;
     width: 100%;
-    min-height: 8.5rem;
     padding: .2rem 1rem .8rem;
     border: 0; background: none;
     resize: none;
-    overflow: hidden;   /* height is driven by JS autosize */
+    overflow: hidden;              /* height is driven by sizeNote() */
     font-size: .93rem;
     line-height: 1.62;
     color: var(--ink-soft);
+    /* pre-wrap, not pre: indentation is preserved, but a long line wraps
+       inside the card instead of running off the right edge where — on a
+       phone especially — it simply cannot be read. break-word then handles
+       the single unbroken token (a URL, a minified line). */
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
 }
 .note-body::placeholder { color: var(--ink-faint); }
 .note-body:focus { outline: none; color: var(--ink); }
 
+/* Long note: the body is cut off at NOTE_COLLAPSE_PX and this fades the
+   last couple of lines out, so the cut reads as deliberate rather than as
+   a rendering glitch. pointer-events:none keeps the text under it usable. */
+.note-fade {
+    position: absolute; inset-inline: 0; bottom: 0;
+    height: 64px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--dur) var(--ease);
+    background: linear-gradient(to bottom, transparent, var(--surface) 82%);
+}
+.note.is-clamped .note-fade { opacity: 1; }
+
+/* The expand control only exists for notes that actually overflow. */
+.note-expand {
+    display: none;
+    align-items: center; justify-content: center; gap: .45em;
+    width: 100%;
+    padding: .55rem 1rem;
+    min-height: 40px;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--accent);
+    font-size: .82rem; font-weight: 600;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+}
+.note.is-clamped .note-expand { display: flex; }
+.note-expand:hover { background: var(--accent-wash); }
+.note-expand .ico { transition: transform var(--dur) var(--ease); }
+.note-expand:hover .ico { transform: translateY(2px); }
+
 .note-foot {
     display: flex; align-items: center; gap: .25rem;
-    padding: .5rem .6rem .5rem 1rem;
+    padding: .45rem .55rem .45rem 1rem;
     border-top: 1px solid var(--line);
     background: var(--surface-2);
 }
 .note-stamp {
-    flex: 1;
+    flex: 1; min-width: 0;
     font-size: .74rem;
     color: var(--ink-faint);
     font-variant-numeric: tabular-nums;
@@ -542,7 +615,7 @@ a { color: var(--accent); }
 
 .note-act {
     display: grid; place-items: center;
-    width: 30px; height: 30px;
+    width: 34px; height: 34px; flex: none;
     border: 0; border-radius: var(--r-sm);
     background: none;
     color: var(--ink-faint);
@@ -552,6 +625,77 @@ a { color: var(--accent); }
 .note-act:hover { background: var(--bg-tint); color: var(--ink); }
 .note-act.is-on { color: var(--accent); }
 .note-act.act-del:hover { background: var(--danger-wash); color: var(--danger); }
+.note-act.is-working { color: var(--accent); pointer-events: none; }
+.note-act.is-working .ico { animation: spin 1s linear infinite; }
+
+/* ============================================================
+   FOCUS VIEW — one note, centred and full height
+   ============================================================ */
+
+.focus-modal { padding: 0; }
+
+.focus-card {
+    display: flex; flex-direction: column;
+    width: min(920px, 100%);
+    height: min(88vh, 100%);
+    margin: auto;
+    background: var(--surface-over);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    animation: rise 320ms var(--ease) both;
+}
+
+.focus-head {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .8rem .8rem .8rem 1.4rem;
+    border-bottom: 1px solid var(--line);
+    flex: none;
+}
+.focus-title {
+    flex: 1; min-width: 0;
+    border: 0; background: none;
+    font-family: var(--font-display);
+    font-size: 1.3rem; font-weight: 500;
+    letter-spacing: -.01em;
+}
+.focus-title::placeholder { color: var(--ink-faint); font-style: italic; }
+.focus-title:focus { outline: none; }
+
+/* The whole point of this view: a comfortable measure, its own scroll,
+   and monospace so pasted code lines up. */
+.focus-body {
+    flex: 1; min-height: 0;
+    width: 100%;
+    padding: 1.2rem 1.4rem;
+    border: 0; background: none;
+    resize: none;
+    font-family: var(--font-mono);
+    font-size: .88rem;
+    line-height: 1.65;
+    tab-size: 4;
+    /* Here there IS room, so code keeps its real line breaks and scrolls
+       sideways rather than wrapping — alignment survives. The phone
+       override below flips this back to wrapping. */
+    white-space: pre;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+.focus-body:focus { outline: none; }
+
+.focus-foot {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .7rem 1rem .7rem 1.4rem;
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+    flex: none;
+}
+.focus-meta {
+    font-size: .78rem; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ============================================================
    FILES
@@ -578,12 +722,17 @@ a { color: var(--accent); }
     color: var(--accent);
 }
 .dropzone.is-over .ico-lg { color: var(--accent); }
+.dropzone.is-disabled { opacity: .62; }
 
 .file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .55rem; }
 
 .file {
     display: flex; align-items: center; gap: .9rem;
-    padding: .75rem .8rem .75rem 1rem;
+    /* A grid item defaults to min-width:auto, which refuses to shrink below
+       its content — the row then pushes the page sideways on a narrow phone.
+       This is what lets the filename ellipsis actually do its job. */
+    min-width: 0;
+    padding: .7rem .7rem .7rem 1rem;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--r-md);
@@ -617,28 +766,11 @@ a { color: var(--accent); }
 
 .file-acts { display: flex; gap: .15rem; flex: none; }
 
-.storage-bar {
-    display: flex; align-items: center; gap: .8rem;
-    margin-top: 1.4rem;
-}
-.storage-track {
-    flex: 1; height: 5px;
-    border-radius: var(--r-pill);
-    background: var(--bg-tint);
-    overflow: hidden;
-}
-.storage-fill {
-    height: 100%; width: 0;
-    border-radius: var(--r-pill);
-    background: var(--accent);
-    transition: width 500ms var(--ease), background var(--dur) var(--ease);
-}
-.storage-fill.is-high { background: var(--warn); }
-.storage-fill.is-full { background: var(--danger); }
 .storage-text {
     font-size: .78rem; color: var(--ink-faint);
     font-variant-numeric: tabular-nums;
 }
+.file-note { margin: 1.2rem 0 0; text-align: right; }
 
 /* ============================================================
    EMPTY STATE
@@ -660,16 +792,19 @@ a { color: var(--accent); }
 
 .modal {
     position: fixed; inset: 0; z-index: 80;
-    display: grid; place-items: center;
+    display: flex; align-items: center; justify-content: center;
     padding: 1.5rem;
     background: rgba(20, 20, 26, .5);
     backdrop-filter: blur(3px);
     animation: fade 200ms var(--ease) both;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .modal-card {
     width: min(520px, 100%);
     max-height: 88vh; overflow-y: auto;
+    margin: auto;
     padding: 1.8rem;
     background: var(--surface-over);
     border: 1px solid var(--line);
@@ -678,7 +813,8 @@ a { color: var(--accent); }
     animation: rise 320ms var(--ease) both;
 }
 .modal-sm { width: min(400px, 100%); }
-.modal-card h2 { font-size: 1.4rem; margin-bottom: 1.2rem; }
+.modal-card h2 { font-size: 1.4rem; }
+.modal-lede { margin: .5rem 0 1.5rem; font-size: .88rem; color: var(--ink-soft); }
 
 .field { margin-bottom: 1.3rem; }
 .field label {
@@ -690,6 +826,7 @@ a { color: var(--accent); }
 .field input {
     width: 100%;
     padding: .6em .85em;
+    min-height: 42px;
     background: var(--surface-2);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
@@ -701,11 +838,12 @@ a { color: var(--accent); }
     box-shadow: 0 0 0 3px var(--accent-wash);
 }
 .hint { margin: .45rem 0 0; font-size: .8rem; color: var(--ink-faint); line-height: 1.5; }
+.hint-block { margin: 0 0 1.4rem; }
 
 .facts {
     display: grid; grid-template-columns: auto 1fr;
     gap: .45rem 1.1rem;
-    margin: 0 0 1.5rem;
+    margin: 0 0 1rem;
     padding: .9rem 1rem;
     background: var(--surface-2);
     border-radius: var(--r-md);
@@ -714,7 +852,7 @@ a { color: var(--accent); }
 .facts dt { color: var(--ink-faint); }
 .facts dd { margin: 0; font-family: var(--font-mono); font-size: .8rem; word-break: break-all; }
 
-.confirm-body { margin: 0 0 1.5rem; color: var(--ink-soft); font-size: .92rem; }
+.confirm-body { margin: .8rem 0 1.5rem; color: var(--ink-soft); font-size: .92rem; }
 
 .modal-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 
@@ -724,12 +862,14 @@ a { color: var(--accent); }
 
 .toast {
     position: fixed; left: 50%; bottom: 1.7rem; z-index: 90;
+    max-width: min(30rem, calc(100vw - 2rem));
     transform: translateX(-50%);
     padding: .65em 1.2em;
     background: var(--ink);
     color: var(--bg);
     border-radius: var(--r-pill);
     font-size: .87rem; font-weight: 500;
+    text-align: center;
     box-shadow: var(--shadow-lg);
     animation: toast-in 320ms var(--ease) both;
 }
@@ -753,22 +893,81 @@ a { color: var(--accent); }
    RESPONSIVE
    ============================================================ */
 
-@media (max-width: 720px) {
-    #app { padding: 0 1rem 2.5rem; }
-    .brand h1 { font-size: 1.2rem; }
-    /* The status word is the first thing to go; the icon still carries the
-       state, and the row has to fit four controls on a narrow phone. */
-    #sync-text { display: none; }
-    .sync-pill { padding: .38em .55em; margin-right: .15rem; }
-    .panel-bar { flex-wrap: wrap; }
-    .search { max-width: none; flex-basis: 100%; }
-    .note-grid { grid-template-columns: 1fr; }
-    .file { flex-wrap: wrap; }
-    .file-acts { margin-left: auto; }
+@media (max-width: 860px) {
+    .note-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 }
 
-@media (max-width: 380px) {
+@media (max-width: 720px) {
+    #app { padding: 0 1rem 2.5rem; }
+    .brand h1 { font-size: 1.18rem; }
+    .brand-mark { width: 30px; height: 30px; }
+
+    /* The status word goes first: the icon still carries the state, and
+       the row has to fit four controls on a narrow phone. */
+    #sync-text { display: none; }
+    .sync-pill { padding: .38em .6em; margin-right: .1rem; }
+    .icon-btn { width: 36px; height: 36px; }
+
+    .tabs { gap: 0; }
+    .tab { flex: 1; justify-content: center; padding: .65em .5em; }
+
+    .panel-bar { flex-wrap: wrap; }
+    .search { max-width: none; flex-basis: 100%; }
+    .panel-bar .btn { flex: 1; }
+
+    .note-grid { grid-template-columns: 1fr; }
+
+    .connect-card { flex-wrap: wrap; }
+    .connect-card .btn { width: 100%; }
+
+    .dropzone { padding: 1.6rem 1rem; }
+    .file-note { text-align: left; }
+
+    .modal { padding: 1rem; align-items: flex-end; }
+    .modal-card { max-height: 92vh; padding: 1.4rem; }
+    .modal-actions .btn { flex: 1; }
+    .modal-actions .btn-sm { flex: none; }
+
+    /* Full-bleed sheet: a centred card wastes a phone screen, and the whole
+       point of this view is room to read. These must come AFTER the .modal
+       rule above — .focus-modal is also a .modal, same specificity, so it
+       only wins by being later in the sheet. */
+    .focus-modal { padding: 0; align-items: stretch; }
+    .focus-card {
+        width: 100%; height: 100%;
+        max-height: none;
+        margin: 0;
+        border: 0; border-radius: 0;
+    }
+    .focus-head { padding: .7rem .6rem .7rem 1rem; }
+    .focus-title { font-size: 1.12rem; }
+    /* No room to scroll sideways on a phone — wrap instead, or half of
+       every code line is unreachable. */
+    .focus-body {
+        padding: 1rem; font-size: .84rem;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        overflow-x: hidden;
+    }
+    /* Plain padding here sits under the iOS home indicator. */
+    .focus-foot { padding: .6rem .8rem max(.6rem, env(safe-area-inset-bottom)); }
+
+    .toast { bottom: max(1rem, env(safe-area-inset-bottom)); }
+}
+
+/* iOS zooms in when a focused field is below 16px, then leaves the page
+   scaled. Everything typed into holds at 16px here; the visual weight is
+   carried by colour and spacing instead. */
+@media (max-width: 720px) {
+    .field input, .search input, .note-title, .note-body,
+    .focus-title, .focus-body, #passkey { font-size: 16px; }
+    .note-body { line-height: 1.6; }
+}
+
+@media (max-width: 400px) {
     .brand h1 em { display: none; }   /* "Docket" alone still reads */
+    .note-foot { padding-left: .7rem; }
+    .focus-foot .btn-sm { padding: .35em .6em; }
 }
 
 @media (prefers-reduced-motion: reduce) {

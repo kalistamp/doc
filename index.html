@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="A private docket for notes and files, synced across every machine.">
+<meta name="description" content="A private docket for notes and files, synced across every machine through your own gist.">
 <title>Docket Sharing</title>
 
 <!-- Theme bootstrap. Runs before the stylesheet paints so a dark-mode
@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=1">
+<link rel="stylesheet" href="./style.css?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -52,6 +52,9 @@
         <symbol id="i-signout" viewBox="0 0 24 24"><path d="M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 8l-4 4 4 4M6 12h10"/></symbol>
         <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
         <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6ZM12 15v5"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+        <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="M17.5 18H7a4 4 0 0 1-.6-8A6 6 0 0 1 16 6.6M3 3l18 18"/></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
     </defs>
 </svg>
 
@@ -96,7 +99,7 @@
                 <svg class="ico ico-sun"><use href="#i-sun"></use></svg>
                 <svg class="ico ico-moon"><use href="#i-moon"></use></svg>
             </button>
-            <button id="settings-btn" class="icon-btn" type="button" title="Settings" aria-label="Settings">
+            <button id="settings-btn" class="icon-btn" type="button" title="Cloud sync settings" aria-label="Settings">
                 <svg class="ico"><use href="#i-gear"></use></svg>
             </button>
             <button id="lock-btn" class="icon-btn" type="button" title="Lock" aria-label="Lock">
@@ -109,15 +112,29 @@
         <svg class="ico"><use href="#i-alert"></use></svg>
         <span id="banner-text"></span>
         <button id="banner-retry" class="btn btn-ghost btn-sm" type="button">Retry</button>
-        <button id="banner-close" class="banner-x" type="button" aria-label="Dismiss">&times;</button>
+        <button id="banner-close" class="banner-x" type="button" aria-label="Dismiss">
+            <svg class="ico"><use href="#i-x"></use></svg>
+        </button>
+    </div>
+
+    <!-- Shown until a token + gist id are saved. Notes still work and are
+         kept on this device; the gist is what carries them elsewhere. -->
+    <div id="connect-card" class="connect-card" hidden>
+        <svg class="ico ico-lg"><use href="#i-cloud-off"></use></svg>
+        <div class="connect-main">
+            <h3>Not syncing yet</h3>
+            <p>Notes are saved on this device only. Add your own GitHub token and
+               gist id to carry them to your other machines.</p>
+        </div>
+        <button class="btn btn-primary" type="button" data-act="settings">Connect</button>
     </div>
 
     <nav class="tabs" role="tablist">
-        <button class="tab is-active" data-tab="notes" role="tab" aria-selected="true">
+        <button class="tab is-active" data-tab="notes" role="tab" aria-selected="true" aria-controls="panel-notes">
             <svg class="ico"><use href="#i-note"></use></svg>
             Notes <span class="tab-count" id="count-notes">0</span>
         </button>
-        <button class="tab" data-tab="files" role="tab" aria-selected="false">
+        <button class="tab" data-tab="files" role="tab" aria-selected="false" aria-controls="panel-files">
             <svg class="ico"><use href="#i-file"></use></svg>
             Files <span class="tab-count" id="count-files">0</span>
         </button>
@@ -164,48 +181,84 @@
             <div id="dropzone" class="dropzone">
                 <svg class="ico ico-lg"><use href="#i-upload"></use></svg>
                 <p><strong>Drop files here</strong> or <button class="linkish" type="button" data-act="upload">browse</button></p>
-                <p class="hint" id="dropzone-hint">Up to 2 MB each</p>
+                <p class="hint" id="dropzone-hint">&nbsp;</p>
             </div>
 
             <ul id="file-list" class="file-list"></ul>
-
-            <div class="storage-bar">
-                <div class="storage-track"><div id="storage-fill" class="storage-fill"></div></div>
-                <span id="storage-text" class="storage-text">0 B stored</span>
-            </div>
+            <p id="file-note" class="storage-text file-note"></p>
         </section>
     </main>
 
     <footer class="foot">
-        <span>Backed by a private gist · <span id="foot-stamp">—</span></span>
+        <span>Your gist, your token · <span id="foot-stamp">not connected</span></span>
     </footer>
+</div>
+
+<!-- ============================================================
+     FOCUS VIEW — one note, centred, full height. This is where a
+     pasted file of a thousand lines is actually readable.
+     ============================================================ -->
+<div id="focus-modal" class="modal focus-modal" hidden>
+    <div class="focus-card" role="dialog" aria-modal="true" aria-label="Note">
+        <header class="focus-head">
+            <input type="text" id="focus-title" class="focus-title"
+                   placeholder="Untitled" maxlength="120" aria-label="Note title">
+            <button id="focus-close" class="icon-btn" type="button" aria-label="Close">
+                <svg class="ico"><use href="#i-x"></use></svg>
+            </button>
+        </header>
+        <textarea id="focus-body" class="focus-body" spellcheck="false"
+                  placeholder="Start typing…" aria-label="Note body"></textarea>
+        <footer class="focus-foot">
+            <span id="focus-meta" class="focus-meta"></span>
+            <span class="spacer"></span>
+            <button id="focus-copy" class="btn btn-ghost btn-sm" type="button">
+                <svg class="ico"><use href="#i-copy"></use></svg> Copy
+            </button>
+            <button id="focus-done" class="btn btn-primary btn-sm" type="button">Done</button>
+        </footer>
+    </div>
 </div>
 
 <!-- ============================================================
      MODALS
      ============================================================ -->
 <div id="settings-modal" class="modal" hidden>
-    <div class="modal-card">
-        <h2>Settings</h2>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Cloud sync settings">
+        <h2>Cloud sync</h2>
+        <p class="modal-lede">Docket keeps nothing of its own. Point it at a gist you
+           own and it becomes yours — on this device and any other you enter these on.</p>
 
         <div class="field">
             <label for="token-input">GitHub token</label>
-            <input type="password" id="token-input" placeholder="Leave blank to use the built-in token"
+            <input type="password" id="token-input" placeholder="ghp_… or github_pat_…"
                    spellcheck="false" autocomplete="off">
-            <p class="hint">Overrides the token baked into this build and is kept on this
-               machine only. Use it to swap in a re-scoped or rotated PAT without a redeploy.</p>
+            <p class="hint">Needs <strong>Gists → Read and write</strong> and nothing else.
+               <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">Create one ↗</a></p>
+        </div>
+
+        <div class="field">
+            <label for="gist-input">Gist ID</label>
+            <input type="text" id="gist-input" placeholder="Paste your Gist ID or URL"
+                   spellcheck="false" autocomplete="off">
+            <p class="hint">Make a secret gist with any placeholder content; Docket fills in
+               the rest. A full URL works — the id is pulled out of it.
+               <a href="https://gist.github.com/" target="_blank" rel="noopener">New gist ↗</a></p>
         </div>
 
         <dl class="facts">
-            <dt>Active token</dt><dd id="fact-token">—</dd>
-            <dt>Gist</dt><dd><a id="fact-gist" href="#" target="_blank" rel="noopener">open ↗</a></dd>
+            <dt>Status</dt><dd id="fact-status">—</dd>
+            <dt>Token</dt><dd id="fact-token">—</dd>
             <dt>Notes</dt><dd id="fact-notes">—</dd>
             <dt>Files</dt><dd id="fact-files">—</dd>
         </dl>
 
+        <p class="hint hint-block">Both values stay in this browser's localStorage and are
+           never committed or sent anywhere but GitHub.</p>
+
         <div class="modal-actions">
-            <button id="reload-btn" class="btn btn-ghost" type="button">
-                <svg class="ico"><use href="#i-refresh"></use></svg> Reload from gist
+            <button id="reload-btn" class="btn btn-ghost btn-sm" type="button">
+                <svg class="ico"><use href="#i-refresh"></use></svg> Reload
             </button>
             <span class="spacer"></span>
             <button id="settings-cancel" class="btn btn-ghost" type="button">Cancel</button>
@@ -215,7 +268,7 @@
 </div>
 
 <div id="confirm-modal" class="modal" hidden>
-    <div class="modal-card modal-sm">
+    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
         <h2 id="confirm-title">Are you sure?</h2>
         <p id="confirm-body" class="confirm-body"></p>
         <div class="modal-actions">
@@ -228,8 +281,8 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="./config.js?v=1"></script>
-<script src="./store.js?v=1"></script>
-<script src="./app.js?v=1"></script>
+<script src="./config.js?v=2"></script>
+<script src="./store.js?v=2"></script>
+<script src="./app.js?v=2"></script>
 </body>
 </html>

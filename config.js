@@ -1,60 +1,48 @@
 /* ============================================================
    DOCKET SHARING — configuration
+
+   No credentials live here. The GitHub token and gist id are yours,
+   entered once per device under Settings → Cloud sync, and kept in
+   localStorage on that device only. Nothing in this repo can reach
+   anyone's gist, which is what makes the published site safe to share.
    ============================================================ */
 
 window.DOCKET_CONFIG = {
-    /* The passkey that unlocks the front page. It is also the key that
-       decrypts SEALED_TOKEN below, so changing one means re-sealing the
-       other (see tools/seal.py). */
+    /* Unlocks the front page. Not a security boundary — this file is
+       public. It only keeps the UI from opening to a passer-by; your
+       data is protected by the token you enter, not by this. */
     PASSKEY: "p",
 
-    /* The secret gist that backs the whole app.
-       https://gist.github.com/kalistamp/0a151d864ab18d9e2fd950cb400c6261 */
-    GIST_ID: "0a151d864ab18d9e2fd950cb400c6261",
-
-    /* Notes + file *metadata* live here — small, rewritten on every edit. */
+    /* Notes and file *metadata* — small, rewritten on every edit. */
     DATA_FILE: "docket share.json",
 
-    /* File *payloads* (base64) live in a companion file in the same gist.
-       Splitting them matters: blobs can run to megabytes, and if they shared
-       a file with the notes, every keystroke would re-upload all of them. */
-    BLOB_FILE: "docket-blobs.json",
+    /* Each upload becomes its own gist file, `docket-blob-<id>`. One
+       file per blob rather than one big JSON of them, because:
+         · the API only returns 1 MB inline, and serves the rest through
+           raw_url up to 10 MB — a ceiling that applies per FILE, so
+           splitting multiplies the space actually reachable;
+         · changing one file no longer re-uploads all the others;
+         · loading the app no longer downloads every blob you have. */
+    BLOB_PREFIX: "docket-blob-",
 
-    /* Per-file ceiling. A gist file over ~10 MB is rejected by the API and
-       one over ~1 MB stops being served inline, so we stay well under.
-       Base64 inflates by ~33%, which this limit is applied *before*. */
-    MAX_FILE_BYTES: 2 * 1024 * 1024,
+    /* Per-file ceiling on the raw bytes. base64 inflates by 4/3, so this
+       lands at ~9.3 MB stored — just under the 10 MB above which GitHub
+       stops serving a gist file over HTTP and demands a git clone. Going
+       higher would store files the app then could not read back. */
+    MAX_FILE_BYTES: 7 * 1024 * 1024,
 
-    /* Ceiling on everything stored, measured on the raw bytes. Base64 adds
-       ~33%, so 6 MB here lands around 8 MB on the wire — comfortably inside
-       what the gist API will take, with headroom for the JSON around it. */
-    MAX_TOTAL_BYTES: 6 * 1024 * 1024,
+    /* The API returns at most 300 files per gist and truncates the list
+       past that. One slot is the data file; the rest is headroom. */
+    MAX_FILES: 280,
 
     /* Quiet period after typing before a save fires, in ms. */
     SAVE_DEBOUNCE_MS: 900,
 
     /* Ceiling on how long an unsaved change may sit, in ms. Without it,
-       steady typing resets the debounce forever and nothing is ever saved. */
+       steady typing resets the debounce forever and nothing is saved. */
     MAX_SAVE_WAIT_MS: 5000,
 
-    /* PBKDF2 rounds used to derive the token key. Must match the sealer. */
-    KDF_ITERATIONS: 250000,
-
-    /* The GitHub PAT, AES-GCM encrypted under the passkey.
-       ------------------------------------------------------------------
-       This repo is public, so the plaintext token can never live in it: a
-       bare `github_pat_…` string would be caught by GitHub secret scanning
-       and revoked automatically, and anyone could read it. Sealing keeps
-       the app self-contained (any machine, passkey only, no setup) without
-       publishing a live credential.
-
-       Be clear-eyed about what this is: obfuscation, not secrecy. The
-       passkey is one character, so anyone who reads this file can brute
-       force it in moments. Keep the PAT scoped to gists and nothing else,
-       and treat the gist contents as "not really private". A token pasted
-       into Settings overrides this one and stays in localStorage only. */
-    SEALED_TOKEN:
-        "QXM8/eFsQ3vo0zCN68GqT7BGXyLqo5oDSalUrUWAkj/Ht0qGaYmkKk5W7+SioyS/" +
-        "miTJJ9TW3mVOC3VdGOKoAJounWeWiQk3KFAcrUHdmVPLx/oOeugeiw2nlgP0qCwT" +
-        "mABHzDR1tDIyZ4P3D5vBx4HAAi9/VqHHSiten18xwVDVtGtSDV+j0VM="
+    /* A note taller than this collapses behind an expand control, so one
+       pasted file cannot push everything else off the screen. */
+    NOTE_COLLAPSE_PX: 260
 };

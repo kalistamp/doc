@@ -1,102 +1,75 @@
 /* ============================================================
    DOCKET SHARING — gist store
 
-   The gist is the only backend. Everything the app knows lives in two
-   files inside it: `docket share.json` (notes + file metadata) and
-   `docket-blobs.json` (base64 payloads).
+   Credentials are the user's own, entered under Settings → Cloud sync
+   and held in localStorage on that device. Until both a token and a
+   gist id are present the store is simply "not connected": the app
+   still runs, notes still persist locally, nothing is uploaded.
 
-   Writes are queued rather than fired per-change. A PATCH only touches
-   the files it names, so a notes save and a blob save can be coalesced
-   into one request, and only ever one request is in flight at a time —
-   two overlapping PATCHes to the same gist can land out of order and
+   Layout inside the gist:
+     docket share.json     notes + file metadata (rewritten on edits)
+     docket-blob-<id>      one file per upload, base64
+
+   Blobs are NOT downloaded on load. The gist listing gives us each
+   file's content or a raw_url, and we only pull the bytes when someone
+   actually downloads or copies that file — so a docket holding 200 MB
+   opens as fast as an empty one.
+
+   Writes are queued: a PATCH only touches the files it names, so
+   several changes coalesce into one request, and only one request is
+   ever in flight — two overlapping PATCHes can land out of order and
    silently undo each other.
-
-   Getting the credential to talk to that gist is the other half of this
-   file: unsealing the PAT is the first step of every session, and this
-   is the only place that needs it.
    ============================================================ */
 
 (function () {
     const CFG = window.DOCKET_CONFIG;
-    const API = `https://api.github.com/gists/${CFG.GIST_ID}`;
-    const TOKEN_OVERRIDE_KEY = 'docket.tokenOverride';
+    const TOKEN_KEY = 'docket.token';
+    const GIST_KEY = 'docket.gistId';
 
-    let token = null;
+    let token = readLS(TOKEN_KEY);
+    let gistId = readLS(GIST_KEY);
     let listeners = [];
 
     /* Dirty flags + the getters that produce a payload when we flush. */
-    const dirty = { data: false, blobs: false };
-    let sources = { data: null, blobs: null };
+    const dirty = { data: false };
+    let pendingBlobs = {};      /* gist filename -> base64 or null (delete) */
+    let sources = { data: null };
 
     let flushTimer = null;
     let inFlight = null;
     let lastError = null;
-    let dirtySince = 0;   /* when the oldest unsaved change arrived */
+    let dirtySince = 0;
+
+    /* What the last load told us about each blob file, so a download can
+       resolve bytes without re-listing the gist. */
+    let blobRefs = {};
+    const blobCache = {};
 
     const emit = (state, detail) => listeners.forEach((fn) => fn(state, detail));
 
-    /* ---------- token ---------------------------------------------- */
-
-    /* Undoes what tools/seal.py did. The sealed blob is laid out as
-           salt(16) || iv(12) || AES-GCM ciphertext(+16 byte tag)
-       base64'd, with the AES key derived by PBKDF2-SHA256 over the
-       passkey. Both sides have to agree on the iteration count, which is
-       why it lives in config.js instead of being written out twice. */
-
-    function b64ToBytes(b64) {
-        const bin = atob(b64);
-        const out = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        return out;
+    function readLS(k) {
+        try { return localStorage.getItem(k) || ''; } catch (e) { return ''; }
+    }
+    function writeLS(k, v) {
+        try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {}
     }
 
-    async function deriveKey(passkey, salt, iterations) {
-        const material = await crypto.subtle.importKey(
-            'raw', new TextEncoder().encode(passkey), 'PBKDF2', false, ['deriveKey']
-        );
-        return crypto.subtle.deriveKey(
-            { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-            material,
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['decrypt']
-        );
+    /* ---------- credentials ------------------------------------------ */
+
+    const isConnected = () => Boolean(token && gistId);
+
+    function setCredentials(nextToken, nextGist) {
+        token = (nextToken || '').trim();
+        /* People paste the whole gist URL as often as the bare id. */
+        gistId = (nextGist || '').trim().replace(/^.*gist\.github\.com\//, '')
+                                        .replace(/^[^/]+\//, '')
+                                        .replace(/[#?].*$/, '')
+                                        .replace(/\/+$/, '');
+        writeLS(TOKEN_KEY, token);
+        writeLS(GIST_KEY, gistId);
     }
 
-    /* Throws if the passkey is wrong or the blob is malformed — AES-GCM
-       authenticates, so a bad key fails loudly instead of handing back
-       plausible garbage. */
-    async function unseal(sealedB64, passkey, iterations) {
-        const blob = b64ToBytes(sealedB64);
-        if (blob.length < 16 + 12 + 16) throw new Error('Sealed token is truncated.');
-
-        const key = await deriveKey(passkey, blob.slice(0, 16), iterations);
-        const plain = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: blob.slice(16, 28) }, key, blob.slice(28)
-        );
-        return new TextDecoder().decode(plain);
-    }
-
-    /** A token pasted into Settings wins over the sealed one, so a
-     *  re-scoped or rotated PAT can be dropped in without a redeploy. */
-    function tokenOverride() {
-        try { return localStorage.getItem(TOKEN_OVERRIDE_KEY) || ''; } catch (e) { return ''; }
-    }
-
-    function setTokenOverride(value) {
-        const trimmed = (value || '').trim();
-        try {
-            if (trimmed) localStorage.setItem(TOKEN_OVERRIDE_KEY, trimmed);
-            else localStorage.removeItem(TOKEN_OVERRIDE_KEY);
-        } catch (e) { /* private mode — the in-memory token still applies */ }
-        if (trimmed) token = trimmed;
-    }
-
-    async function unlock(passkey) {
-        const override = tokenOverride();
-        if (override) { token = override; return; }
-        token = await unseal(CFG.SEALED_TOKEN, passkey, CFG.KDF_ITERATIONS);
-    }
+    const api = () => `https://api.github.com/gists/${gistId}`;
 
     const headers = () => ({
         'Authorization': `Bearer ${token}`,
@@ -104,26 +77,25 @@
         'Content-Type': 'application/json'
     });
 
-    /* ---------- errors ----------------------------------------------- */
+    /* ---------- errors ------------------------------------------------ */
 
-    /* GitHub's own wording for a scope problem ("Resource not accessible by
-       personal access token") tells you nothing about how to fix it, and
-       this is the single most likely thing to go wrong with a fine-grained
-       PAT, so it gets translated. */
+    /* GitHub's own wording for a scope problem ("Resource not accessible
+       by personal access token") says nothing about how to fix it, and
+       it is the single most likely thing to go wrong. */
     function describe(res, body, verb) {
         if (res.status === 401) {
-            return 'GitHub rejected the token (401). It may have been revoked or expired — paste a fresh one in Settings.';
+            return 'GitHub rejected the token (401). It may be expired or mistyped — check it under Settings → Cloud sync.';
         }
         if (res.status === 403) {
-            return `The token is not allowed to ${verb} this gist (403). Give it Account permissions → Gists → Read and write, then reload.`;
+            return `The token is not allowed to ${verb} this gist (403). It needs Gists → Read and write: for a fine-grained token that is under Account permissions.`;
         }
         if (res.status === 404) {
             return verb === 'read'
-                ? 'No gist found at that id (404) — check GIST_ID, or the token may not be allowed to see it.'
-                : 'Cannot write this gist (404). Usually the token lacks Gists → Read and write.';
+                ? 'No gist found for that id (404). Check the Gist ID under Settings → Cloud sync — and that this token can see it.'
+                : 'Cannot write that gist (404). Usually the token lacks Gists → Read and write.';
         }
-        if (res.status === 422) {
-            return 'GitHub refused the payload (422) — usually a file over the size limit.';
+        if (res.status === 413 || res.status === 422) {
+            return `GitHub refused the upload (${res.status}) — the file is likely too large for a gist.`;
         }
         const msg = body && body.message ? ` — ${body.message}` : '';
         return `Sync failed (${res.status})${msg}`;
@@ -133,113 +105,162 @@
         try { return await res.json(); } catch (e) { return null; }
     }
 
-    /* ---------- load -------------------------------------------------- */
-
-    function parseFile(files, name, fallback) {
-        const entry = files && files[name];
-        if (!entry) return fallback;
-        /* Gist files past ~1 MB come back truncated with a raw_url instead
-           of inline content; that mostly means the blob file. */
-        if (entry.truncated && entry.raw_url) return { __truncated: entry.raw_url };
-        try { return JSON.parse(entry.content || 'null') ?? fallback; }
-        catch (e) { return fallback; }
-    }
-
-    async function resolveTruncated(value, fallback) {
-        if (!value || !value.__truncated) return value;
-        try {
-            const res = await fetch(value.__truncated, { cache: 'no-store' });
-            return JSON.parse(await res.text());
-        } catch (e) { return fallback; }
-    }
+    /* ---------- load --------------------------------------------------- */
 
     async function load() {
+        if (!isConnected()) { emit('offline'); return null; }
+
         emit('loading');
-        const res = await fetch(`${API}?_=${Date.now()}`, {
-            headers: headers(), cache: 'no-store'
-        });
+        let res;
+        try {
+            res = await fetch(`${api()}?_=${Date.now()}`, {
+                headers: headers(), cache: 'no-store'
+            });
+        } catch (e) {
+            lastError = 'Could not reach GitHub. Check your connection.';
+            emit('error', lastError);
+            throw new Error(lastError);
+        }
         if (!res.ok) {
-            const body = await readBody(res);
-            const err = new Error(describe(res, body, 'read'));
+            const err = new Error(describe(res, await readBody(res), 'read'));
             lastError = err.message;
             emit('error', err.message);
             throw err;
         }
+
         const json = await res.json();
         const files = json.files || {};
 
-        let data = parseFile(files, CFG.DATA_FILE, {});
-        let blobs = parseFile(files, CFG.BLOB_FILE, {});
-        data = await resolveTruncated(data, {});
-        blobs = await resolveTruncated(blobs, {});
+        /* Keep every blob's handle; fetch none of them. */
+        blobRefs = {};
+        Object.keys(files).forEach((name) => {
+            if (name.startsWith(CFG.BLOB_PREFIX)) blobRefs[name] = files[name];
+        });
+
+        let data = {};
+        const entry = files[CFG.DATA_FILE];
+        if (entry) {
+            try {
+                const text = entry.truncated && entry.raw_url
+                    ? await (await fetch(entry.raw_url, { cache: 'no-store' })).text()
+                    : entry.content;
+                data = JSON.parse(text || '{}') || {};
+            } catch (e) { data = {}; }
+        }
 
         lastError = null;
         emit('synced');
         return {
             notes: Array.isArray(data.notes) ? data.notes : [],
-            files: Array.isArray(data.files) ? data.files : [],
-            blobs: blobs && typeof blobs === 'object' ? blobs : {}
+            files: Array.isArray(data.files) ? data.files : []
         };
     }
 
-    /* ---------- save -------------------------------------------------- */
+    /* ---------- blobs -------------------------------------------------- */
 
-    /** Register the functions that produce each gist file's contents.
-     *  The store pulls from these at flush time rather than being handed a
-     *  snapshot at request time, so a burst of edits always uploads the
-     *  latest state instead of a stale one. */
-    function bind(dataSource, blobSource) {
-        sources = { data: dataSource, blobs: blobSource };
+    const blobName = (id) => `${CFG.BLOB_PREFIX}${id}`;
+
+    /** Resolve one file's base64, pulling it only now. Returns '' if the
+     *  gist has no such file (metadata without a payload). */
+    async function getBlob(id) {
+        const name = blobName(id);
+        if (blobCache[name] != null) return blobCache[name];
+        if (pendingBlobs[name]) return pendingBlobs[name];
+
+        const ref = blobRefs[name];
+        if (!ref) return '';
+
+        let text;
+        if (ref.truncated && ref.raw_url) {
+            const res = await fetch(ref.raw_url, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`Could not download that file (${res.status}).`);
+            text = await res.text();
+        } else {
+            text = ref.content || '';
+        }
+        blobCache[name] = text.trim();
+        return blobCache[name];
     }
 
-    /* Plain debouncing starves: someone typing steadily resets the timer on
-       every keystroke and nothing ever reaches the gist. The ceiling makes
-       the wait bounded — quiet typing still coalesces into one PATCH, but a
-       long unbroken run gets checkpointed every MAX_SAVE_WAIT_MS. */
+    function putBlob(id, base64) {
+        const name = blobName(id);
+        pendingBlobs[name] = base64;
+        blobCache[name] = base64;
+        touch();
+    }
+
+    function dropBlob(id) {
+        const name = blobName(id);
+        pendingBlobs[name] = null;     /* null tells GitHub to delete it */
+        delete blobCache[name];
+        delete blobRefs[name];
+        touch();
+    }
+
+    /* ---------- save ---------------------------------------------------- */
+
+    /** The store pulls from this at flush time rather than being handed a
+     *  snapshot when the change happens, so a burst of edits always
+     *  uploads the latest state instead of a stale one. */
+    function bind(dataSource) { sources.data = dataSource; }
+
+    /* Plain debouncing starves: someone typing steadily resets the timer
+       on every keystroke and nothing ever reaches the gist. The ceiling
+       keeps the wait bounded. */
     function touch(which) {
-        dirty[which] = true;
+        if (which !== 'blobsOnly') dirty.data = true;
+        if (!isConnected()) { emit('offline'); return; }
+
         emit('dirty');
         if (!dirtySince) dirtySince = Date.now();
-
         clearTimeout(flushTimer);
         if (Date.now() - dirtySince >= CFG.MAX_SAVE_WAIT_MS) { flush(); return; }
         flushTimer = setTimeout(flush, CFG.SAVE_DEBOUNCE_MS);
     }
 
-    const touchData = () => touch('data');
-    const touchBlobs = () => touch('blobs');
+    const touchData = () => touch();
+
+    const hasPending = () =>
+        dirty.data || Object.keys(pendingBlobs).length > 0 || !!inFlight;
 
     async function flush() {
         clearTimeout(flushTimer);
-        if (!dirty.data && !dirty.blobs) return;
+        if (!isConnected()) return;
+        if (!dirty.data && !Object.keys(pendingBlobs).length) return;
         if (inFlight) { await inFlight.catch(() => {}); return flush(); }
 
-        const sending = { data: dirty.data, blobs: dirty.blobs };
+        const sendData = dirty.data;
+        const sendBlobs = pendingBlobs;
         dirty.data = false;
-        dirty.blobs = false;
+        pendingBlobs = {};
         dirtySince = 0;
 
         const payload = {};
-        if (sending.data) {
+        if (sendData) {
             payload[CFG.DATA_FILE] = { content: JSON.stringify(sources.data(), null, 2) };
         }
-        if (sending.blobs) {
-            payload[CFG.BLOB_FILE] = { content: JSON.stringify(sources.blobs()) };
-        }
+        Object.keys(sendBlobs).forEach((name) => {
+            /* null content is how the gist API deletes a file. */
+            payload[name] = sendBlobs[name] === null ? null : { content: sendBlobs[name] };
+        });
 
         emit('saving');
         inFlight = (async () => {
-            const res = await fetch(API, {
+            const res = await fetch(api(), {
                 method: 'PATCH', headers: headers(),
                 body: JSON.stringify({ files: payload })
             });
             if (!res.ok) {
-                /* Put the flags back — the change is still unsaved, and the
-                   next edit (or Retry) should carry it up again. */
-                dirty.data = dirty.data || sending.data;
-                dirty.blobs = dirty.blobs || sending.blobs;
+                /* Put the work back — the change is still unsaved, and the
+                   next edit or Retry should carry it up again. */
+                dirty.data = dirty.data || sendData;
+                pendingBlobs = Object.assign({}, sendBlobs, pendingBlobs);
                 throw new Error(describe(res, await readBody(res), 'write'));
             }
+            /* Written blobs are now readable straight from the gist. */
+            Object.keys(sendBlobs).forEach((name) => {
+                if (sendBlobs[name] !== null) blobRefs[name] = { content: sendBlobs[name] };
+            });
         })();
 
         try {
@@ -252,19 +273,20 @@
         } finally {
             inFlight = null;
         }
-        /* An edit that landed mid-request left the flags set; go again. */
-        if ((dirty.data || dirty.blobs) && !lastError) flush();
+        if (hasPending() && !lastError) flush();
     }
 
     window.DocketStore = {
-        unlock, load, bind, touchData, touchBlobs,
-        flush,
+        load, bind, touchData, flush,
+        getBlob, putBlob, dropBlob,
         retry: () => { lastError = null; flush(); },
         onStatus: (fn) => listeners.push(fn),
-        hasPending: () => dirty.data || dirty.blobs || !!inFlight,
+        hasPending,
         lastError: () => lastError,
-        tokenOverride, setTokenOverride,
-        /* Settings shows a fingerprint rather than the token itself. */
-        tokenHint: () => (token ? `${token.slice(0, 11)}…${token.slice(-4)}` : '—')
+        isConnected,
+        setCredentials,
+        credentials: () => ({ token, gistId }),
+        /* Settings shows a fingerprint, never the token itself. */
+        tokenHint: () => (token ? `${token.slice(0, 7)}…${token.slice(-4)}` : '—')
     };
 })();
