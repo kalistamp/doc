@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=2">
+<link rel="stylesheet" href="./style.css?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -55,6 +55,7 @@
         <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
         <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="M17.5 18H7a4 4 0 0 1-.6-8A6 6 0 0 1 16 6.6M3 3l18 18"/></symbol>
         <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 6a1 1 0 0 1 1-1h4l2 2.5h8a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6Z"/></symbol>
     </defs>
 </svg>
 
@@ -139,6 +140,15 @@
             Files <span class="tab-count" id="count-files">0</span>
         </button>
     </nav>
+
+    <!-- Folders are shared by both tabs, so the bar lives once, here, and
+         filters whichever tab is showing. -->
+    <div class="folder-bar">
+        <div id="folder-chips" class="folder-chips" role="tablist" aria-label="Folders"></div>
+        <button id="new-folder-btn" class="chip chip-add" type="button">
+            <svg class="ico"><use href="#i-plus"></use></svg> Folder
+        </button>
+    </div>
 
     <main>
         <!-- ---------------- NOTES ---------------- -->
@@ -267,6 +277,25 @@
     </div>
 </div>
 
+<!-- One modal, two jobs: picking a folder for an item, and naming a new
+     one. The picker is hidden in create mode. -->
+<div id="folder-modal" class="modal" hidden>
+    <div class="modal-card modal-sm" role="dialog" aria-modal="true">
+        <h2 id="folder-modal-title">Move to folder</h2>
+        <ul id="folder-picker" class="folder-picker"></ul>
+        <div class="field" id="folder-new-field">
+            <label for="folder-name">New folder</label>
+            <input type="text" id="folder-name" maxlength="40" placeholder="Name it"
+                   spellcheck="false" autocomplete="off">
+        </div>
+        <div class="modal-actions">
+            <span class="spacer"></span>
+            <button id="folder-cancel" class="btn btn-ghost" type="button">Cancel</button>
+            <button id="folder-create" class="btn btn-primary" type="button">Create</button>
+        </div>
+    </div>
+</div>
+
 <div id="confirm-modal" class="modal" hidden>
     <div class="modal-card modal-sm" role="dialog" aria-modal="true">
         <h2 id="confirm-title">Are you sure?</h2>
@@ -281,8 +310,8 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="./config.js?v=2"></script>
-<script src="./store.js?v=2"></script>
-<script src="./app.js?v=2"></script>
+<script src="./config.js?v=3"></script>
+<script src="./store.js?v=3"></script>
+<script src="./app.js?v=3"></script>
 </body>
 </html>

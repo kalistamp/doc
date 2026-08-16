@@ -152,7 +152,9 @@
         emit('synced');
         return {
             notes: Array.isArray(data.notes) ? data.notes : [],
-            files: Array.isArray(data.files) ? data.files : []
+            files: Array.isArray(data.files) ? data.files : [],
+            /* Absent in v2 documents — an older gist just has no folders. */
+            folders: Array.isArray(data.folders) ? data.folders : []
         };
     }
 

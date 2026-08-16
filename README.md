@@ -47,6 +47,16 @@ readable, and on a phone it becomes a full-screen sheet.
 the gist, so it comes back down on any machine — download it, or copy a text
 file's contents straight to the clipboard.
 
+**Folders.** One shared set across both tabs, as a scrolling chip bar under
+the tabs: `All`, each folder with its count, and `Unfiled`. The counts follow
+whichever tab you are on. Create one with **+ Folder**, delete one with the ×
+on its chip, and move an item with the folder button on a note's footer or in
+a file's meta line. Anything made while a folder is selected lands in it.
+
+A folder is only a label — membership is one `folder` id on the item — so
+deleting a folder never deletes what was in it. Its contents fall back to
+Unfiled, and the confirm dialog says so before you commit.
+
 ---
 
 ## How it is wired
@@ -62,8 +72,8 @@ app.js       notes, files, focus view, tabs, modals, rendering
 ### Storage layout
 
 ```
-docket share.json     notes + file metadata      rewritten on every edit
-docket-blob-<id>      one file per upload        written only when that file changes
+docket share.json     notes + file metadata + folders   rewritten on every edit
+docket-blob-<id>      one file per upload               written only when that file changes
 ```
 
 One gist file per upload, rather than one big JSON of them, because of how

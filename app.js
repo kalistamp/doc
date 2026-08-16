@@ -1,9 +1,13 @@
 /* ============================================================
    DOCKET SHARING — app
 
-   State is two collections:
-     notes  [{ id, title, body, pinned, created, updated }]
-     files  [{ id, name, size, type, added }]      ← metadata only
+   State is three collections:
+     notes    [{ id, title, body, pinned, folder, created, updated }]
+     files    [{ id, name, size, type, folder, added }]   ← metadata only
+     folders  [{ id, name, created }]
+
+   A folder is only a label: `folder` holds its id, so deleting a folder
+   never deletes what was in it.
 
    Both are cached in localStorage so the app works before you have
    connected a gist, and both are pushed to the gist when you have.
@@ -20,11 +24,21 @@
 
     const LS_NOTES = 'docket.notes';
     const LS_FILES = 'docket.files';
+    const LS_FOLDERS = 'docket.folders';
+    const LS_ACTIVE = 'docket.activeFolder';
 
     let notes = [];
     let files = [];
+    let folders = [];
     let unlocked = false;
     let focusId = null;
+
+    /* Which folder the bar is filtered to: null = All, UNFILED = the items
+       with no folder, otherwise a folder id. The sentinel is spelled out
+       rather than being a blank or symbolic value so it is greppable and
+       can never collide with a uid(), which is base36 only. */
+    const UNFILED = '__unfiled__';
+    let activeFolder = null;
 
     /* ============================================================
        HELPERS
@@ -74,6 +88,7 @@
         try {
             localStorage.setItem(LS_NOTES, JSON.stringify(notes));
             localStorage.setItem(LS_FILES, JSON.stringify(files));
+            localStorage.setItem(LS_FOLDERS, JSON.stringify(folders));
         } catch (e) { /* quota or private mode — the gist is the real home */ }
     }
 
@@ -81,8 +96,11 @@
         try {
             const n = JSON.parse(localStorage.getItem(LS_NOTES) || '[]');
             const f = JSON.parse(localStorage.getItem(LS_FILES) || '[]');
+            const d = JSON.parse(localStorage.getItem(LS_FOLDERS) || '[]');
             if (Array.isArray(n)) notes = n;
             if (Array.isArray(f)) files = f;
+            if (Array.isArray(d)) folders = d;
+            activeFolder = localStorage.getItem(LS_ACTIVE) || null;
         } catch (e) { /* leave the empties */ }
     }
 
@@ -116,7 +134,7 @@
         unlocked = true;
 
         Store.bind(() => ({
-            notes, files, version: 2, updated: new Date().toISOString()
+            notes, files, folders, version: 3, updated: new Date().toISOString()
         }));
 
         /* Show the cached copy immediately, then reconcile with the gist.
@@ -149,10 +167,13 @@
             if (merge) {
                 notes = mergeById(data.notes, notes);
                 files = mergeById(data.files, files);
+                folders = mergeById(data.folders, folders);
             } else {
                 notes = data.notes;
                 files = data.files;
+                folders = data.folders;
             }
+            pruneFolder();
             cache();
             renderAll();
         } catch (err) { /* onStatus already surfaced it */ }
@@ -242,6 +263,7 @@
             document.querySelectorAll('.panel').forEach((p) => {
                 p.classList.toggle('is-active', p.id === `panel-${tab.dataset.tab}`);
             });
+            renderFolders();
         });
     });
 
@@ -255,12 +277,196 @@
     });
 
     /* ============================================================
+       FOLDERS
+
+       One shared set across both tabs — a folder holds notes and files
+       alike, and the bar filters whichever tab is showing. Membership is
+       a single `folder` id on the item, so a folder is only ever a label:
+       deleting one never deletes what is in it.
+       ============================================================ */
+
+    const folderName = (id) => {
+        const f = folders.find((x) => x.id === id);
+        return f ? f.name : '';
+    };
+
+    const inActiveFolder = (item) =>
+        activeFolder === null ||
+        (activeFolder === UNFILED ? !item.folder : item.folder === activeFolder);
+
+    /* A folder deleted on another machine leaves items pointing at nothing,
+       and possibly a selection pointing at nothing. Both fall back to
+       unfiled rather than showing an empty app with no way out. */
+    function pruneFolder() {
+        const live = new Set(folders.map((f) => f.id));
+        [...notes, ...files].forEach((i) => { if (i.folder && !live.has(i.folder)) i.folder = null; });
+        if (activeFolder && activeFolder !== UNFILED && !live.has(activeFolder)) {
+            setActiveFolder(null, true);
+        }
+    }
+
+    function setActiveFolder(id, quiet) {
+        activeFolder = id;
+        try {
+            if (id) localStorage.setItem(LS_ACTIVE, id);
+            else localStorage.removeItem(LS_ACTIVE);
+        } catch (e) {}
+        if (quiet) return;
+        renderFolders();
+        renderNotes();
+        renderFiles();
+    }
+
+    const activeTab = () =>
+        document.querySelector('.tab.is-active').dataset.tab;
+
+    /* Counts follow the tab you are on: "Work 3" means three notes while
+       you are reading notes, three files while you are reading files. */
+    function folderCount(id) {
+        const pool = activeTab() === 'files' ? files : notes;
+        return pool.filter((i) => (id === UNFILED ? !i.folder : i.folder === id)).length;
+    }
+
+    function renderFolders() {
+        const pool = activeTab() === 'files' ? files : notes;
+        const unfiled = pool.filter((i) => !i.folder).length;
+
+        const chip = (id, label, count, deletable) => `
+            <button class="chip${activeFolder === id ? ' is-active' : ''}"
+                    type="button" data-folder="${id === null ? '' : esc(id)}"
+                    role="tab" aria-selected="${activeFolder === id}">
+                ${id === null ? '' : '<svg class="ico"><use href="#i-folder"></use></svg>'}
+                <span class="chip-label">${esc(label)}</span>
+                <span class="chip-count">${count}</span>
+                ${deletable ? `<span class="chip-x" role="button" tabindex="0"
+                     data-del="${esc(id)}" aria-label="Delete folder ${esc(label)}">
+                     <svg class="ico"><use href="#i-x"></use></svg></span>` : ''}
+            </button>`;
+
+        el('folder-chips').innerHTML =
+            chip(null, 'All', pool.length, false) +
+            folders.map((f) => chip(f.id, f.name, folderCount(f.id), true)).join('') +
+            (unfiled && folders.length ? chip(UNFILED, 'Unfiled', unfiled, false) : '');
+    }
+
+    el('folder-chips').addEventListener('click', (e) => {
+        const x = e.target.closest('.chip-x');
+        if (x) { e.stopPropagation(); askDeleteFolder(x.dataset.del); return; }
+        const chip = e.target.closest('.chip');
+        if (!chip) return;
+        setActiveFolder(chip.dataset.folder || null);
+    });
+
+    function askDeleteFolder(id) {
+        const name = folderName(id);
+        const held = [...notes, ...files].filter((i) => i.folder === id).length;
+        confirmAction(
+            `Delete “${name}”?`,
+            held
+                ? `The ${held} item${held === 1 ? '' : 's'} in it will move to Unfiled, not be deleted.`
+                : 'The folder is empty.',
+            () => {
+                folders = folders.filter((f) => f.id !== id);
+                [...notes, ...files].forEach((i) => { if (i.folder === id) i.folder = null; });
+                if (activeFolder === id) setActiveFolder(null, true);
+                renderAll();
+                commit();
+                toast(`Folder “${name}” deleted`);
+            });
+    }
+
+    /* ---- the folder modal: pick one for an item, or make a new one ---- */
+
+    let folderTarget = null;     /* {kind:'note'|'file', id} while moving */
+
+    function openFolderModal(target) {
+        folderTarget = target || null;
+        const moving = Boolean(target);
+        el('folder-modal-title').textContent = moving ? 'Move to folder' : 'New folder';
+        el('folder-picker').hidden = !moving;
+        el('folder-create').textContent = moving ? 'Create & move' : 'Create';
+
+        if (moving) {
+            const item = itemOf(target);
+            const row = (id, label) => `
+                <li><button class="picker-row${item.folder === id || (!item.folder && id === null)
+                        ? ' is-current' : ''}" type="button" data-pick="${id === null ? '' : esc(id)}">
+                    <svg class="ico"><use href="#i-${id === null ? 'x' : 'folder'}"></use></svg>
+                    <span>${esc(label)}</span>
+                </button></li>`;
+            el('folder-picker').innerHTML =
+                row(null, 'No folder') + folders.map((f) => row(f.id, f.name)).join('');
+        }
+
+        el('folder-name').value = '';
+        el('folder-modal').hidden = false;
+        (moving ? el('folder-picker').querySelector('.picker-row') : el('folder-name')).focus();
+    }
+
+    const itemOf = (t) => (t.kind === 'note' ? notes : files).find((i) => i.id === t.id);
+
+    function closeFolderModal() {
+        el('folder-modal').hidden = true;
+        folderTarget = null;
+    }
+
+    function assignFolder(id) {
+        if (!folderTarget) return;
+        const item = itemOf(folderTarget);
+        if (item) {
+            item.folder = id;
+            if (folderTarget.kind === 'note') item.updated = new Date().toISOString();
+        }
+        closeFolderModal();
+        renderAll();
+        commit();
+        toast(id ? `Moved to “${folderName(id)}”` : 'Removed from folder');
+    }
+
+    el('folder-picker').addEventListener('click', (e) => {
+        const row = e.target.closest('.picker-row');
+        if (row) assignFolder(row.dataset.pick || null);
+    });
+
+    function createFolder() {
+        const name = el('folder-name').value.trim();
+        if (!name) { el('folder-name').focus(); return; }
+        if (folders.some((f) => f.name.toLowerCase() === name.toLowerCase())) {
+            toast('You already have a folder with that name');
+            return;
+        }
+        const folder = { id: uid(), name, created: new Date().toISOString() };
+        folders.push(folder);
+
+        /* Creating from the move dialog should also do the moving —
+           otherwise you make a folder and then have to find the item again. */
+        if (folderTarget) { assignFolder(folder.id); return; }
+
+        closeFolderModal();
+        setActiveFolder(folder.id);
+        renderAll();
+        commit();
+        toast(`Folder “${name}” created`);
+    }
+
+    el('new-folder-btn').addEventListener('click', () => openFolderModal(null));
+    el('folder-create').addEventListener('click', createFolder);
+    el('folder-cancel').addEventListener('click', closeFolderModal);
+    el('folder-name').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); createFolder(); }
+    });
+    el('folder-modal').addEventListener('click', (e) => {
+        if (e.target === el('folder-modal')) closeFolderModal();
+    });
+
+    /* ============================================================
        NOTES
        ============================================================ */
 
     function sortedNotes() {
         const q = el('note-search').value.trim().toLowerCase();
         return notes
+            .filter(inActiveFolder)
             .filter((n) => !q ||
                 (n.title || '').toLowerCase().includes(q) ||
                 (n.body || '').toLowerCase().includes(q))
@@ -293,6 +499,12 @@
                     <span class="note-expand-label">Expand</span>
                 </button>
                 <div class="note-foot">
+                    <button class="note-folder${n.folder ? ' is-set' : ''}" type="button"
+                            title="${n.folder ? `In “${esc(folderName(n.folder))}” — move` : 'Move to a folder'}"
+                            aria-label="Move to folder">
+                        <svg class="ico"><use href="#i-folder"></use></svg>
+                        ${n.folder ? `<span>${esc(folderName(n.folder))}</span>` : ''}
+                    </button>
                     <span class="note-stamp">${esc(relTime(n.updated))}</span>
                     <button class="note-act act-pin${n.pinned ? ' is-on' : ''}" type="button"
                             title="${n.pinned ? 'Unpin' : 'Pin to top'}"
@@ -352,7 +564,11 @@
 
     function newNote() {
         const now = new Date().toISOString();
-        notes.unshift({ id: uid(), title: '', body: '', pinned: false, created: now, updated: now });
+        notes.unshift({
+            id: uid(), title: '', body: '', pinned: false,
+            folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
+            created: now, updated: now
+        });
         renderNotes();
         commit();
         const first = $('.note .note-title');
@@ -386,7 +602,9 @@
         const note = findNote(card.dataset.id);
         if (!note) return;
 
-        if (e.target.closest('.note-expand')) {
+        if (e.target.closest('.note-folder')) {
+            openFolderModal({ kind: 'note', id: note.id });
+        } else if (e.target.closest('.note-expand')) {
             openFocus(note.id);
         } else if (e.target.closest('.act-pin')) {
             note.pinned = !note.pinned;
@@ -547,6 +765,7 @@
                 name: file.name,
                 size: file.size,
                 type: file.type || 'application/octet-stream',
+                folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
                 added: new Date().toISOString()
             });
             added++;
@@ -579,7 +798,8 @@
     function renderFiles() {
         const list = el('file-list');
         const q = el('file-search').value.trim().toLowerCase();
-        const shown = files.filter((f) => !q || f.name.toLowerCase().includes(q));
+        const shown = files.filter(inActiveFolder)
+                           .filter((f) => !q || f.name.toLowerCase().includes(q));
 
         el('count-files').textContent = files.length;
 
@@ -590,7 +810,11 @@
                 </span>
                 <div class="file-main">
                     <span class="file-name" title="${esc(f.name)}">${esc(f.name)}</span>
-                    <span class="file-meta">${formatBytes(f.size)} · ${esc(relTime(f.added))}</span>
+                    <span class="file-meta">${formatBytes(f.size)} · ${esc(relTime(f.added))}
+                        · <button class="file-folder${f.folder ? ' is-set' : ''}" type="button"
+                                  aria-label="Move to folder">${f.folder
+                            ? esc(folderName(f.folder)) : 'add to folder'}</button>
+                    </span>
                 </div>
                 <div class="file-acts">
                     ${isTexty(f.type, f.name) ? `
@@ -623,6 +847,11 @@
         if (!row) return;
         const meta = files.find((f) => f.id === row.dataset.id);
         if (!meta) return;
+
+        if (e.target.closest('.file-folder')) {
+            openFolderModal({ kind: 'file', id: meta.id });
+            return;
+        }
 
         const btn = e.target.closest('.note-act');
         if (!btn) return;
@@ -738,6 +967,7 @@
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (!el('confirm-modal').hidden) closeConfirm();
+        else if (!el('folder-modal').hidden) closeFolderModal();
         else if (!el('settings-modal').hidden) el('settings-modal').hidden = true;
         else if (!el('focus-modal').hidden) closeFocus();
     });
@@ -756,6 +986,7 @@
        ============================================================ */
 
     function renderAll() {
+        renderFolders();
         renderNotes();
         renderFiles();
         reflectConnection();

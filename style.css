@@ -463,6 +463,129 @@ a { color: var(--accent); }
 .panel.is-active { display: block; animation: fade 260ms var(--ease) both; }
 
 /* ============================================================
+   FOLDERS
+   ============================================================ */
+
+.folder-bar {
+    display: flex; align-items: center; gap: .5rem;
+    margin: -.5rem 0 1.3rem;
+}
+
+/* The chips scroll sideways rather than wrapping into a tall stack — with
+   a dozen folders that would push the notes below the fold on a phone.
+   min-width:0 is what lets the flex child actually scroll. */
+.folder-chips {
+    display: flex; gap: .4rem;
+    flex: 1; min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+    /* Fade the right edge so a chip cut off mid-scroll reads as "there is
+       more this way" rather than as a clipping bug. */
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.folder-chips::-webkit-scrollbar { display: none; }
+
+.chip {
+    display: inline-flex; align-items: center; gap: .4em;
+    padding: .34em .8em;
+    min-height: 34px;
+    flex: none;
+    border: 1px solid var(--line);
+    border-radius: var(--r-pill);
+    background: var(--surface);
+    color: var(--ink-soft);
+    font-size: .84rem; font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+                border-color var(--dur) var(--ease);
+}
+.chip:hover { border-color: var(--line-strong); color: var(--ink); }
+.chip.is-active {
+    background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.chip-label { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
+.chip-count {
+    font-size: .74rem; font-variant-numeric: tabular-nums;
+    opacity: .7;
+}
+.chip-add { color: var(--accent); border-style: dashed; }
+.chip-add:hover { background: var(--accent-wash); color: var(--accent); }
+
+/* The delete affordance only appears once the chip is hovered or selected,
+   so a row of folders reads as navigation rather than a row of X buttons. */
+.chip-x {
+    display: grid; place-items: center;
+    width: 18px; height: 18px;
+    margin-right: -.25em;
+    border-radius: var(--r-pill);
+    opacity: 0;
+    transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.chip:hover .chip-x, .chip.is-active .chip-x { opacity: .55; }
+.chip-x:hover { opacity: 1 !important; background: rgba(128,128,128,.28); }
+.chip-x .ico { width: .8em; height: .8em; stroke-width: 2.4; }
+
+/* Touch has no hover, so on a phone the control is always visible on the
+   selected chip — otherwise a folder could never be deleted there. */
+@media (hover: none) {
+    .chip.is-active .chip-x { opacity: .75; }
+}
+
+/* Picking a folder for one item */
+.folder-picker { list-style: none; margin: 0 0 1.2rem; padding: 0; max-height: 44vh; overflow-y: auto; }
+.picker-row {
+    display: flex; align-items: center; gap: .6rem;
+    width: 100%;
+    padding: .6em .8em;
+    min-height: 42px;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--ink);
+    font-size: .92rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+}
+.picker-row:hover { background: var(--bg-tint); }
+.picker-row .ico { color: var(--ink-faint); }
+.picker-row.is-current {
+    background: var(--accent-wash); border-color: var(--accent-soft); color: var(--accent);
+}
+.picker-row.is-current .ico { color: var(--accent); }
+
+/* The per-item folder button, on a note footer and in a file's meta line */
+.note-folder {
+    display: inline-flex; align-items: center; gap: .35em;
+    max-width: 11ch;
+    padding: .2em .5em;
+    height: 26px;
+    border: 0; border-radius: var(--r-pill);
+    background: none;
+    color: var(--ink-faint);
+    font-size: .74rem; font-weight: 550;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.note-folder span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-folder:hover { background: var(--bg-tint); color: var(--ink); }
+.note-folder.is-set { color: var(--accent); background: var(--accent-wash); max-width: 14ch; }
+
+.file-folder {
+    border: 0; padding: 0; background: none;
+    color: var(--ink-faint);
+    font-size: inherit; font-weight: 550;
+    text-decoration: underline; text-underline-offset: 2px;
+    text-decoration-style: dotted;
+    cursor: pointer;
+}
+.file-folder:hover { color: var(--ink); }
+.file-folder.is-set { color: var(--accent); text-decoration-style: solid; }
+
+/* ============================================================
    PANEL BAR (search + primary action)
    ============================================================ */
 
