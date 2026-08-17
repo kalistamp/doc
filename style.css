@@ -678,18 +678,26 @@ a { color: var(--accent); }
     column-gap: 1.1rem;
 }
 
-/* Explorer-style local views. Medium is the original layout; compact fits
-   more notes on screen, while large gives each note more reading room. */
-#panel-notes[data-note-view="compact"] .note-grid {
-    columns: 220px;
+/* ---- views -------------------------------------------------------
+   The menu reads like a file explorer's: four card sizes and a
+   titles-only list. Medium is the base .note-grid above and needs no
+   overrides. Only widths and padding live here — the matching body
+   heights are in config.js (NOTE_VIEW_HEIGHTS), because JS measures
+   and clamps against them. */
+
+#panel-notes[data-note-view="small"] .note-grid {
+    columns: 230px;
     column-gap: .75rem;
 }
-#panel-notes[data-note-view="compact"] .note { margin-bottom: .75rem; }
-#panel-notes[data-note-view="compact"] .note-title {
+#panel-notes[data-note-view="small"] .note { margin-bottom: .75rem; }
+#panel-notes[data-note-view="small"] .note-title {
     padding: .72rem .8rem .42rem;
     font-size: 1rem;
 }
-#panel-notes[data-note-view="compact"] .note-body { padding: .35rem .8rem .72rem; }
+#panel-notes[data-note-view="small"] .note-body {
+    padding: .35rem .8rem .72rem;
+    font-size: .88rem;
+}
 
 #panel-notes[data-note-view="large"] .note-grid {
     columns: 440px;
@@ -702,6 +710,101 @@ a { color: var(--accent); }
 #panel-notes[data-note-view="large"] .note-body {
     padding: .55rem 1.2rem 1.15rem;
     font-size: 1rem;
+}
+
+#panel-notes[data-note-view="xlarge"] .note-grid {
+    columns: 560px;
+    column-gap: 1.5rem;
+}
+#panel-notes[data-note-view="xlarge"] .note { margin-bottom: 1.5rem; }
+#panel-notes[data-note-view="xlarge"] .note-title {
+    padding: 1.35rem 1.5rem .85rem;
+    font-size: 1.4rem;
+}
+#panel-notes[data-note-view="xlarge"] .note-body {
+    padding: .6rem 1.5rem 1.4rem;
+    font-size: 1.05rem;
+    line-height: 1.7;
+}
+
+/* List: one full-width row per note, title only, the way an explorer
+   drops from thumbnails to a plain list. The card is already a flex
+   column, so the whole row is a direction change plus hiding the body —
+   no second markup path to keep in step with the cards. */
+#panel-notes[data-note-view="list"] .note-grid {
+    columns: 1;
+}
+#panel-notes[data-note-view="list"] .note {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: .4rem;
+    border-radius: var(--r-sm);
+    box-shadow: none;
+}
+#panel-notes[data-note-view="list"] .note:hover { background: var(--surface-2); }
+#panel-notes[data-note-view="list"] .note-bodywrap { display: none; }
+
+/* The pinned hairline runs along the top of a card; in a row it becomes
+   the left edge instead. */
+#panel-notes[data-note-view="list"] .note.is-pinned::before {
+    width: 3px; height: auto;
+    align-self: stretch;
+    background: linear-gradient(180deg, var(--accent), var(--accent-soft));
+}
+
+#panel-notes[data-note-view="list"] .note-title {
+    flex: 1 1 auto;
+    width: auto; min-width: 0;
+    padding: .5rem .85rem;
+    font-size: 1rem;
+    text-overflow: ellipsis;
+}
+
+/* Every row can be opened here, not just an overflowing one: with no
+   body on screen, this control is the only way into the note. It shrinks
+   to the chevron, and the label stays for screen readers. */
+#panel-notes[data-note-view="list"] .note-expand {
+    display: flex;
+    width: auto; flex: none;
+    padding: 0 .5rem;
+    min-height: 34px;
+    border-top: 0;
+    background: none;
+}
+#panel-notes[data-note-view="list"] .note-expand:hover { color: var(--accent); }
+#panel-notes[data-note-view="list"] .note-expand:hover .ico { transform: none; }
+#panel-notes[data-note-view="list"] .note-expand-label {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* Fixed widths, so folder and stamp read as columns down the rows rather
+   than shuffling left and right with the length of each folder name. */
+#panel-notes[data-note-view="list"] .note-foot {
+    flex: none;
+    padding: .25rem .35rem;
+    border-top: 0;
+    background: none;
+}
+#panel-notes[data-note-view="list"] .note-folder,
+#panel-notes[data-note-view="list"] .note-folder.is-set {
+    width: 8.5rem;
+    max-width: none;
+    justify-content: flex-start;
+    /* A pill stretched to a column width reads as a text field, so the
+       chip's wash is dropped here and left to hover. */
+    background: none;
+}
+#panel-notes[data-note-view="list"] .note-folder:hover { background: var(--bg-tint); }
+#panel-notes[data-note-view="list"] .note-stamp {
+    flex: none;
+    width: 5.5rem;
+    padding-right: .4rem;
+    text-align: right;
+    white-space: nowrap;
 }
 
 /* Programmatic focus/scroll lands at the writing controls with breathing
@@ -1299,6 +1402,16 @@ code {
        narrower than the screen on a small phone. */
     .note-grid,
     #panel-notes[data-note-view] .note-grid { columns: 1; }
+
+    /* A list row on a phone keeps the title and every control; only the
+       folder's name is dropped, and its chip still opens the picker.
+       The meta columns give up their fixed widths too — held to them,
+       they squeeze the title down to a single letter. */
+    #panel-notes[data-note-view="list"] .note-folder span { display: none; }
+    #panel-notes[data-note-view="list"] .note-folder,
+    #panel-notes[data-note-view="list"] .note-folder.is-set { width: auto; }
+    #panel-notes[data-note-view="list"] .note-stamp { width: auto; }
+    #panel-notes[data-note-view="list"] .note-title { min-width: 6rem; }
 
     .connect-card { flex-wrap: wrap; }
     .connect-card .btn { width: 100%; }

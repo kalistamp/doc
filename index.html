@@ -177,10 +177,14 @@
                         <option value="title">Title A–Z</option>
                     </select>
                     <label class="sr-only" for="note-view">Note view</label>
+                    <!-- Ordered largest-to-smallest, the way a file
+                         explorer's view menu reads. -->
                     <select id="note-view" class="sort" aria-label="Note view">
-                        <option value="compact">Compact view</option>
-                        <option value="medium" selected>Medium view</option>
-                        <option value="large">Large view</option>
+                        <option value="xlarge">Extra large</option>
+                        <option value="large">Large</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="small">Small</option>
+                        <option value="list">List</option>
                     </select>
                 </div>
                 <span class="spacer"></span>

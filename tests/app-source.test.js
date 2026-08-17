@@ -37,14 +37,38 @@ test('new notes focus and smoothly reveal the exact created card', () => {
     assert.match(css, /\.note-title\s*\{\s*scroll-margin-block:/);
 });
 
-test('compact, medium and large note views are persistent and resize cards', () => {
+test('the note view menu offers a list and four card sizes, and persists', () => {
     assert.match(html, /id="note-view"/);
-    assert.match(html, /value="compact"/);
-    assert.match(html, /value="medium"/);
-    assert.match(html, /value="large"/);
+    ['list', 'small', 'medium', 'large', 'xlarge'].forEach((view) => {
+        assert.match(html, new RegExp(`value="${view}"`), `${view} option exists`);
+    });
+    /* Medium is deliberately absent below: it is the base .note-grid, so
+       overriding it would leave the default with two sources of truth. */
+    ['list', 'small', 'large', 'xlarge'].forEach((view) => {
+        assert.match(css, new RegExp(`data-note-view="${view}"`), `${view} is styled`);
+    });
+    assert.doesNotMatch(css, /data-note-view="medium"/);
+    assert.doesNotMatch(html, /value="compact"/);
     assert.match(app, /noteView: 'docket\.noteView'/);
     assert.match(app, /localStorage\.setItem\(LS\.noteView, view\)/);
     assert.match(app, /dataset\.noteView = view/);
-    assert.match(css, /data-note-view="compact"/);
-    assert.match(css, /data-note-view="large"/);
+});
+
+test('every card-sized view has a body height, and list is measured by neither', () => {
+    const config = fs.readFileSync(path.join(root, 'config.js'), 'utf8');
+    ['small', 'medium', 'large', 'xlarge'].forEach((view) => {
+        assert.match(config, new RegExp(`${view}:\\s*\\{ collapse:`), `${view} has heights`);
+    });
+    assert.doesNotMatch(config, /list:\s*\{ collapse:/);
+    assert.doesNotMatch(config, /compact:\s*\{ collapse:/);
+    /* sizeCard must leave before it measures a hidden body, or a list row
+       would clamp against a scrollHeight of 0. */
+    const sizeCard = app.match(/function sizeCard\(card\) \{([\s\S]*?)\n    \}/);
+    assert.ok(sizeCard, 'sizeCard exists');
+    assert.match(sizeCard[1], /if \(view === 'list'\)[\s\S]*?return;[\s\S]*?scrollHeight/);
+});
+
+test('a device holding the retired compact preference lands on small', () => {
+    assert.match(app, /LEGACY_NOTE_VIEWS = \{ compact: 'small' \}/);
+    assert.match(app, /LEGACY_NOTE_VIEWS\[value\] \|\| value/);
 });

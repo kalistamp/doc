@@ -38,9 +38,21 @@ uploads wait until you have connected one.
 They autosave about a second after you stop typing, and can be sorted by
 recently updated, recently created or title.
 
-The Notes toolbar also offers **Compact**, **Medium**, and **Large** views.
-Compact fits more cards on screen, Medium is the default, and Large gives
-each note more width and visible text. The preference stays on that device.
+The Notes toolbar carries a view menu shaped like a file explorer's — four
+card sizes and a plain list:
+
+| view | what you get |
+| --- | --- |
+| **Extra large** | one or two wide cards, a screenful of text each |
+| **Large** | more width and visible text per note |
+| **Medium** | the default board |
+| **Small** | narrow cards, the most notes on screen |
+| **List** | one row per note: title, folder, stamp, actions — no body |
+
+List rows carry a chevron that opens the note in the full-height focus view,
+since there is no body on the row to click into. The preference stays on that
+device; a device still holding the retired **Compact** setting comes up on
+**Small**, its nearest equivalent.
 
 Leave the title blank and the card borrows its first line — shown only, never
 written back, so typing a real title still just works.

@@ -56,11 +56,14 @@ window.DOCKET_CONFIG = {
     NOTE_COLLAPSE_PX: 260,
 
     /* Card height follows the local view preference. Width is controlled in
-       CSS; these values keep the visible amount of note text proportional. */
+       CSS; these values keep the visible amount of note text proportional.
+       `list` is absent on purpose — that view shows titles only, so there
+       is no body to measure and nothing that can overflow. */
     NOTE_VIEW_HEIGHTS: {
-        compact: { collapse: 160, minimum: 72 },
-        medium:  { collapse: 260, minimum: 96 },
-        large:   { collapse: 420, minimum: 140 }
+        small:  { collapse: 150, minimum: 68 },
+        medium: { collapse: 260, minimum: 96 },
+        large:  { collapse: 420, minimum: 140 },
+        xlarge: { collapse: 560, minimum: 150 }
     },
 
     /* Deleted items sit in the trash this long before being purged on the

@@ -144,7 +144,10 @@
             activeFolder = localStorage.getItem(LS.active) || null;
             el('note-sort').value = localStorage.getItem(LS.noteSort) || 'updated';
             el('file-sort').value = localStorage.getItem(LS.fileSort) || 'added';
-            applyNoteView(localStorage.getItem(LS.noteView) || 'medium');
+            /* Storing the resolved name back retires a legacy preference,
+               so the migration only has to happen once per device. */
+            localStorage.setItem(LS.noteView,
+                applyNoteView(localStorage.getItem(LS.noteView) || 'medium'));
         } catch (e) {}
     }
 
@@ -420,8 +423,16 @@
         renderFiles();
     });
 
+    /* The view menu mirrors a file explorer's: four card sizes and a
+       titles-only list. LEGACY_NOTE_VIEWS carries a device that stored the
+       old "compact" preference across to its nearest equivalent, rather
+       than silently dropping it back to medium. */
+    const NOTE_VIEWS = ['xlarge', 'large', 'medium', 'small', 'list'];
+    const LEGACY_NOTE_VIEWS = { compact: 'small' };
+
     function applyNoteView(value) {
-        const view = ['compact', 'medium', 'large'].includes(value) ? value : 'medium';
+        const named = LEGACY_NOTE_VIEWS[value] || value;
+        const view = NOTE_VIEWS.includes(named) ? named : 'medium';
         el('note-view').value = view;
         el('panel-notes').dataset.noteView = view;
         return view;
@@ -762,6 +773,20 @@
         const n = findNote(card.dataset.id);
         if (!n) return;
         const view = el('note-view').value || 'medium';
+
+        /* List view hides the body, so there is nothing on screen to
+           measure — and measuring anyway would read a scrollHeight of 0
+           off a display:none element and clamp every note to nothing.
+           Inline sizes set by a previous view are cleared on the way in. */
+        if (view === 'list') {
+            const ta = card.querySelector('.note-body');
+            if (ta) ta.style.height = '';
+            const wrap = card.querySelector('.check-wrap');
+            if (wrap) wrap.style.maxHeight = '';
+            card.classList.remove('is-clamped');
+            return;
+        }
+
         const metrics = CFG.NOTE_VIEW_HEIGHTS && CFG.NOTE_VIEW_HEIGHTS[view] || {};
         const limit = metrics.collapse || CFG.NOTE_COLLAPSE_PX;
         const minimum = metrics.minimum || 96;
