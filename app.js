@@ -801,14 +801,39 @@
         if (kind === 'checklist') note.items = [{ id: uid(), text: '', done: false }];
         else note.body = '';
 
+        /* An empty new note cannot match an existing search. Clear it before
+           rendering so the card we are about to focus is never born hidden. */
+        el('search').value = '';
         notes.unshift(note);
         renderNotes();
         renderFolders();
         commit();
-        /* A brand new note is never pinned, so it is the first card in the
-           unpinned grid — focus its title so you can just start typing. */
-        const first = el('note-grid').querySelector('.note-title');
-        if (first) first.focus();
+        revealNewNote(note.id);
+    }
+
+    function revealNewNote(id) {
+        /* Do not assume the card is first: title sorting can place Untitled
+           in the middle of a large docket. Find the exact note we created. */
+        const card = Array.from(document.querySelectorAll('.note'))
+            .find((candidate) => candidate.dataset.id === String(id));
+        const input = card && card.querySelector('.note-title');
+        if (!input) return;
+
+        /* preventScroll avoids the browser's abrupt focus jump; the explicit
+           scroll below supplies one consistent smooth motion instead. */
+        try { input.focus({ preventScroll: true }); }
+        catch (e) { input.focus(); }
+
+        const reveal = () => input.scrollIntoView({
+            behavior: 'smooth', block: 'center', inline: 'nearest'
+        });
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
+
+        /* Mobile keyboards can resize the visual viewport after the first
+           animation frames. Re-centre once after that resize settles. */
+        setTimeout(() => {
+            if (document.activeElement === input) reveal();
+        }, 300);
     }
 
     el('new-note-btn').addEventListener('click', () => newNote('note'));

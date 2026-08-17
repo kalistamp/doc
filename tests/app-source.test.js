@@ -27,3 +27,12 @@ test('the document has no render-blocking third-party font request', () => {
     assert.doesNotMatch(html, /fonts\.googleapis|fonts\.gstatic/);
     assert.match(css, /--font-body:\s*system-ui/);
 });
+
+test('new notes focus and smoothly reveal the exact created card', () => {
+    assert.match(app, /revealNewNote\(note\.id\)/);
+    assert.match(app, /candidate\.dataset\.id === String\(id\)/);
+    assert.match(app, /focus\(\{ preventScroll: true \}\)/);
+    assert.match(app, /scrollIntoView\(\{[\s\S]*?behavior: 'smooth',[\s\S]*?block: 'center'/);
+    assert.match(app, /el\('search'\)\.value = ''/);
+    assert.match(css, /\.note-title\s*\{\s*scroll-margin-block:/);
+});

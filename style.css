@@ -675,6 +675,10 @@ a { color: var(--accent); }
     column-gap: 1.1rem;
 }
 
+/* Programmatic focus/scroll lands at the writing controls with breathing
+   room even when browser chrome or a mobile keyboard reduces the viewport. */
+.note-title { scroll-margin-block: 18vh; }
+
 .note {
     /* Without this a card is free to be split across a column break,
        leaving its footer stranded at the top of the next column. */
