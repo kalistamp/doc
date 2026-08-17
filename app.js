@@ -189,13 +189,14 @@
         Store.bind(() => ({
             notes, files, folders, trash,
             version: 4, updated: new Date().toISOString()
-        }));
+        }), adoptRemote);
 
         /* Show the cached copy immediately, then reconcile with the gist.
            Opening straight into your notes beats a spinner. */
         readCache();
         purgeTrash();
         renderAll();
+        lastPull = Date.now();
         await pullFromGist();
         reflectConnection();
     });
@@ -207,54 +208,79 @@
     });
 
     /**
-     * Pull the gist over local state.
+     * Pull the gist and reconcile it with what is here.
      *
-     * Replacing is right for a normal sync — it is how a delete made on
-     * another machine actually lands here. But on the FIRST connect the
-     * local notes have never been uploaded, and replacing would silently
-     * bin them, so that one case merges instead: remote wins a conflict,
-     * local-only notes survive.
+     * This used to replace local state outright, on the grounds that
+     * replacing is how a delete made on another machine lands. It is also
+     * how a second browser silently bins whatever this one has not pushed
+     * yet — and with a background refresh running, that would include the
+     * note you are typing into. Deletes now travel as `trash` tombstones,
+     * so a merge propagates them just as faithfully and keeps the rest.
      */
-    async function pullFromGist(merge) {
+    async function pullFromGist() {
         try {
             const data = await Store.load();
             if (!data) return;              /* not connected */
-
-            if (merge) {
-                notes = mergeById(data.notes, notes);
-                files = mergeById(data.files, files);
-                folders = mergeById(data.folders, folders);
-                trash = data.trash.concat(trash);
-            } else {
-                notes = data.notes;
-                files = data.files;
-                folders = data.folders;
-                trash = data.trash;
-            }
-            pruneFolder();
+            adoptRemote(Store.merge(data, { notes, files, folders, trash }));
             purgeTrash();
-            cache();
-            renderAll();
             /* Any hot file recovered above is now represented in `notes`.
-               Fold it into the archive and remove the crash-recovery file. */
+               Fold the ones that are ours to fold and delete them. */
             Store.foldLoadedHot();
         } catch (err) { /* onStatus already surfaced it */ }
     }
 
-    function mergeById(remote, local) {
-        const out = remote.slice();
-        const positions = new Map(remote.map((item, index) => [String(item.id), index]));
-        const time = (item) => new Date(item.updated || item.added || item.created || 0).getTime() || 0;
-        local.forEach((item) => {
-            const index = positions.get(String(item.id));
-            if (index == null) {
-                positions.set(String(item.id), out.length);
-                out.push(item);
-            } else if (time(item) > time(out[index])) {
-                out[index] = item;
-            }
-        });
-        return out;
+    /* Set while a merge lands under a caret. Re-rendering the board rips
+       out the textarea being typed into, so the render waits for the edit
+       to end; the data itself is installed immediately either way. */
+    let deferredRender = false;
+
+    const isEditing = () => {
+        const active = document.activeElement;
+        return Boolean(active && active.closest && active.closest('.note')) ||
+               !el('focus-modal').hidden;
+    };
+
+    /* Most merges change nothing — the poll exists to notice the ones that
+       do. Comparing what the board actually draws is what keeps a quiet
+       45-second tick from re-rendering the grid, and a re-render costs a
+       caret, a text selection and a scroll position. Bodies are left out:
+       every edit to one bumps `updated`, and hashing a thousand-line note
+       on a timer to learn what its timestamp already says is waste.
+       `pinned` is in, because pinning deliberately does not bump it. */
+    const fingerprint = () => [notes, files, folders, trash].map((list) =>
+        (list || []).map((row) => {
+            const item = row.item || row;
+            return [item.id, item.updated || item.added || item.created || '',
+                    row.deletedAt || '', row.purged ? 1 : 0,
+                    item.pinned ? 1 : 0].join('~');
+        }).join(',')).join('|');
+
+    /**
+     * Install a reconciled docket. Called both by an explicit pull and by
+     * the store, which reconciles on its own before any write that would
+     * otherwise overwrite another browser's copy.
+     */
+    function adoptRemote(merged) {
+        const before = fingerprint();
+        notes = merged.notes;
+        files = merged.files;
+        folders = merged.folders;
+        trash = merged.trash;
+        pruneFolder();
+        cache();
+        if (fingerprint() === before) return;
+        if (isEditing()) { deferredRender = true; return; }
+        deferredRender = false;
+        renderAll();
+    }
+
+    /* The counterpart: once the caret leaves, show what arrived while it
+       was busy. Cheap to call on every blur — it does nothing unless a
+       merge actually landed. */
+    function flushDeferredRender() {
+        if (!deferredRender || isEditing()) return;
+        deferredRender = false;
+        renderAll();
     }
 
     /* ============================================================
@@ -303,7 +329,7 @@
         if (!Store.isConnected()) { openSettings(); return; }
         Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
-        await pullFromGist();
+        await refresh(true);
     });
 
     function reflectConnection() {
@@ -316,25 +342,61 @@
         if (!on) el('foot-stamp').textContent = 'not connected';
     }
 
-    /* Last line of defence against closing the tab on an unsaved edit. */
+    /* Last line of defence against closing the tab on an unsaved edit.
+       Deliberately does NOT checkpoint: a checkpoint rewrites the whole
+       archive, an unloading page has no time for the read that would make
+       that safe, and the note being typed is already durable in its own
+       hot file. The next load recovers it from there. */
     window.addEventListener('beforeunload', (e) => {
         if (unlocked) {
-            Store.checkpoint();
             /* keepalive gives supporting browsers a chance to finish the
-               final semantic checkpoint while the page is unloading. */
-            Store.flush({ keepalive: true });
+               write while the page is unloading; unguarded says to skip
+               the round trip that page will not survive. */
+            Store.flush({ keepalive: true, unguarded: true });
         }
         if (unlocked && Store.hasPending()) { e.preventDefault(); e.returnValue = ''; }
     });
 
     /* Switching browser tabs is also an editing boundary. Unlike unload,
        visibility changes leave enough time for the queued checkpoint to
-       complete normally. */
+       complete normally — and to be reconciled first. */
     document.addEventListener('visibilitychange', () => {
-        if (!unlocked || document.visibilityState !== 'hidden') return;
-        Store.checkpoint();
-        if (Store.hasPending()) Store.flush({ keepalive: true });
+        if (!unlocked) return;
+        if (document.visibilityState === 'hidden') {
+            Store.checkpoint();
+            if (Store.hasPending()) Store.flush();
+            return;
+        }
+        /* Coming back is the other half, and the half that was missing:
+           a tab that has sat in the background is holding a docket that
+           may be many writes out of date, and the first thing it did on
+           return was push that staleness back up. */
+        refresh(true);
     });
+
+    window.addEventListener('focus', () => refresh());
+
+    /* Two browsers side by side on one screen are never hidden and never
+       blurred, so neither of the above ever fires. A quiet poll is what
+       makes them converge; unchanged costs a 304 with no body. */
+    setInterval(() => {
+        if (document.visibilityState === 'visible') refresh();
+    }, CFG.POLL_MS);
+
+    let lastPull = 0;
+    let pulling = null;
+
+    /** Re-read the gist, at most once per POLL_MS unless forced. Returns
+     *  the in-flight pull if one is already running, so a burst of focus
+     *  and visibility events makes one request between them. */
+    function refresh(force) {
+        if (!unlocked || !Store.isConnected()) return Promise.resolve();
+        if (pulling) return pulling;
+        if (!force && Date.now() - lastPull < CFG.POLL_MS) return Promise.resolve();
+        lastPull = Date.now();
+        pulling = pullFromGist().finally(() => { pulling = null; });
+        return pulling;
+    }
 
     /* ============================================================
        TABS
@@ -533,6 +595,10 @@
                     return false;          /* keep the dialog open */
                 }
                 folder.name = name;
+                /* Merges resolve by timestamp, so anything that changes an
+                   item has to leave one behind or the other browser's older
+                   copy wins the reconcile and undoes it. */
+                folder.updated = new Date().toISOString();
                 renderAll();
                 commit();
                 toast(`Renamed to “${name}”`);
@@ -596,7 +662,10 @@
     function assignFolder(id) {
         if (!folderTarget) return;
         const item = itemOf(folderTarget);
-        if (item) item.folder = id;
+        if (item) {
+            item.folder = id;
+            item.updated = new Date().toISOString();
+        }
         closeFolderModal();
         renderAll();
         commit();
@@ -919,7 +988,11 @@
             const stillEditing = card.contains(active) &&
                 active.matches('.note-title, .note-body, .check-text');
             if (stillEditing) return;
-            if (Store.checkpoint(id)) renderNotes();
+            const folded = Store.checkpoint(id);
+            /* A merge that arrived mid-edit was held back rather than
+               yanked out from under the caret. This is where it lands. */
+            if (deferredRender) { flushDeferredRender(); return; }
+            if (folded) renderNotes();
         }, 0);
     });
 
@@ -1020,10 +1093,17 @@
         });
     }
 
+    /* A purged entry keeps its slot as a bare tombstone, so the live trash
+       is the subset that still has something in it to look at. */
+    const inTrash = () => trash.filter((t) => !t.purged);
+
     function restoreFromTrash(id) {
-        const idx = trash.findIndex((t) => t.item.id === id);
+        const idx = trash.findIndex((t) => t.item.id === id && !t.purged);
         if (idx === -1) return;
         const [entry] = trash.splice(idx, 1);
+        /* Restoring has to out-date the deletion it undoes, or the merge
+           reads the tombstone as the later word and bins it again. */
+        entry.item.updated = new Date().toISOString();
         if (entry.kind === 'note') notes.unshift(entry.item);
         else files.unshift(entry.item);
         pruneFolder();
@@ -1032,32 +1112,47 @@
         toast('Restored');
     }
 
+    /* Dropping the entry outright would resurrect the item: another browser
+       still holding it has nothing left to tell it the thing was deleted,
+       and the next merge unions it straight back in. What is left behind is
+       the id, the date and a flag — a few dozen bytes that remember the
+       deletion until TRASH_DAYS clears the record for good. */
     function purgeForever(entry) {
-        trash = trash.filter((t) => t.item.id !== entry.item.id);
         if (entry.kind === 'file') Store.dropBlob(entry.item.id);
+        const idx = trash.findIndex((t) => t.item.id === entry.item.id);
+        const grave = {
+            kind: entry.kind,
+            item: { id: entry.item.id },
+            deletedAt: entry.deletedAt || new Date().toISOString(),
+            purged: true
+        };
+        if (idx === -1) trash.push(grave); else trash[idx] = grave;
     }
 
     /* Anything sitting in the trash past TRASH_DAYS goes on the next load.
        Files take their gist blob with them, which is the only point at
-       which storage is actually reclaimed. */
+       which storage is actually reclaimed — and it is where a tombstone is
+       finally dropped too, every browser having long since seen it. */
     function purgeTrash() {
         const cutoff = Date.now() - CFG.TRASH_DAYS * 86400000;
         const stale = trash.filter((t) => new Date(t.deletedAt || 0).getTime() < cutoff);
         if (!stale.length) return;
-        stale.forEach(purgeForever);
+        stale.forEach((entry) => { if (!entry.purged) purgeForever(entry); });
+        trash = trash.filter((t) => new Date(t.deletedAt || 0).getTime() >= cutoff);
         commit();
     }
 
     function renderTrash() {
-        el('count-trash').textContent = trash.length;
-        el('tab-trash').hidden = trash.length === 0;
-        if (!trash.length && activeTab() === 'trash') showTab('notes');
+        const live = inTrash();
+        el('count-trash').textContent = live.length;
+        el('tab-trash').hidden = live.length === 0;
+        if (!live.length && activeTab() === 'trash') showTab('notes');
 
-        el('trash-lede').textContent = trash.length
+        el('trash-lede').textContent = live.length
             ? `Deleted items are kept for ${CFG.TRASH_DAYS} days, then removed.`
             : 'Nothing in the trash.';
 
-        el('trash-list').innerHTML = trash.map((t) => `
+        el('trash-list').innerHTML = live.map((t) => `
             <li class="file" data-id="${esc(t.item.id)}">
                 <span class="file-icon" aria-hidden="true">
                     <svg class="ico"><use href="#i-${t.kind === 'note' ? 'note' : 'file'}"></use></svg>
@@ -1078,7 +1173,7 @@
     el('trash-list').addEventListener('click', (e) => {
         const row = e.target.closest('.file');
         if (!row) return;
-        const entry = trash.find((t) => t.item.id === row.dataset.id);
+        const entry = trash.find((t) => t.item.id === row.dataset.id && !t.purged);
         if (!entry) return;
 
         if (e.target.closest('.act-restore')) restoreFromTrash(entry.item.id);
@@ -1094,10 +1189,11 @@
     });
 
     el('empty-trash-btn').addEventListener('click', () => {
-        if (!trash.length) return;
+        const live = inTrash();
+        if (!live.length) return;
         confirmAction('Empty the trash?',
-            `${trash.length} item${trash.length === 1 ? '' : 's'} will be gone for good.`, () => {
-                trash.slice().forEach(purgeForever);
+            `${live.length} item${live.length === 1 ? '' : 's'} will be gone for good.`, () => {
+                live.forEach(purgeForever);
                 renderAll();
                 commit();
                 toast('Trash emptied');
@@ -1141,6 +1237,7 @@
         document.body.classList.remove('is-locked');
         focusId = null;
         Store.checkpoint(id);
+        if (deferredRender) { flushDeferredRender(); return; }
         renderNotes();
     }
 
@@ -1435,6 +1532,7 @@
                 title: 'Rename file', label: 'File name', value: meta.name, max: 200,
                 onSave(name) {
                     meta.name = name;
+                    meta.updated = new Date().toISOString();
                     renderFiles();
                     commit();
                     toast(`Renamed to “${name}”`);
@@ -1710,10 +1808,11 @@
 
         if (!Store.isConnected()) { toast('Cloud sync turned off'); return; }
         toast('Connecting…');
-        /* On an existing connection, never pull over pending local work.
-           A first connection must merge before pushing or it could replace
-           an established remote docket with the local cache. */
-        await pullFromGist(true);
+        /* A first connection has to merge before it pushes, or it replaces
+           an established remote docket with this device's local cache.
+           Every pull merges now, so this is simply the ordinary path. */
+        lastPull = Date.now();
+        await pullFromGist();
         /* Push the merged result straight back, so whatever this device
            had before connecting actually reaches the gist. */
         if (notes.length || files.length) commit();

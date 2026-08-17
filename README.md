@@ -131,7 +131,7 @@ app.js       notes, files, focus view, tabs, modals, rendering
 
 ```
 docket share.json     cold notes + file/folder/trash metadata   written at checkpoints
-docket-hot-<id>       the one note currently being edited       written on the save clock
+docket-hot-<id>       a note being edited, stamped with its owner   written on the save clock
 docket-blob-<id>      one file per upload                        written only when that file changes
 ```
 
@@ -173,16 +173,61 @@ never actually does. On blur or note switch, the hot note folds into the cold
 archive and its temporary file is deleted. If a session is interrupted, load
 reconciles the hot note by its update time and folds it on startup.
 
+A failed save retries itself, backing off from 2 s to a minute, and honours
+`Retry-After` when GitHub asks for one. Nothing rearmed the clock before, so a
+single dropped packet parked the docket on **Failed** until somebody noticed
+the banner and pressed Retry. Rate limiting is called by its name rather than
+reported as the permission error it shares a status code with — several
+browsers saving into one gist can reach GitHub's per-minute write limit, and
+that is a wait, not a setting to change.
+
+Closing the tab deliberately does *not* checkpoint. A checkpoint rewrites the
+whole archive, an unloading page has no time for the read that would make that
+safe, and the note you were typing is already durable in its own hot file —
+the next load recovers it from there.
+
 ---
 
 ## Two machines at once
 
-Sync reconciles notes by id and update time. Different notes can therefore be
-recovered independently from the archive and any crash-left hot file; edits to
-the same note remain last-write-wins.
+Two browsers on one gist are two writers with no lock between them. The write
+queue in `store.js` only orders *this* browser's requests, so on its own it
+does nothing about the case that matters: a PATCH that rewrites the whole
+archive from memory that went stale minutes ago, replacing the other
+browser's docket wholesale.
 
-If you know another machine has been busy, click the status pill first — it
-checkpoints and pushes anything outstanding, then pulls.
+Three things keep that from happening.
+
+**A write that rewrites the archive reads first.** Before that one payload —
+and only that one, since hot files are named per note and per writer, and
+blobs per upload — the store asks GitHub whether the gist has moved since it
+last looked. The question is a conditional request, so an unchanged gist
+answers `304` with no body and no rate-limit charge; the round trip is only
+paid for at checkpoints, never on the typing clock.
+
+**"It moved" is answered by merging, not by overwriting.** Items reconcile by
+id on their own timestamp, and a deletion is not an absence — it is an entry
+in `trash`, which is what lets a delete made on one machine survive being
+merged with a machine that still has the item in its list. An item edited
+after it was binned wins and takes its tombstone with it; emptying the trash
+leaves the id, the date and a flag behind, because dropping the record
+outright is how a purged note walks back in from the other browser. A tie
+goes to the browser doing the reconciling, which is what carries a change
+that deliberately does not bump `updated` — pinning, above all — across the
+merge instead of losing it to an identically dated remote copy.
+
+**A hot file belongs to the browser writing it.** Each one is stamped with a
+client handle, and a browser folds only its own or one left abandoned for two
+minutes. Opening a second window no longer deletes the first one's live
+draft, and a genuine crash still recovers.
+
+Edits to the same note remain last-write-wins. That is the one conflict the
+data model cannot resolve for you, and the version history is the way back.
+
+A visible tab re-reads the gist when you return to it and every 45 s
+otherwise, so two windows side by side converge without being asked. The
+status pill still forces it: it checkpoints, pushes anything outstanding,
+then pulls.
 
 ---
 

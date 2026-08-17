@@ -51,6 +51,24 @@ window.DOCKET_CONFIG = {
        after ten quiet minutes even if the note remains open. */
     CHECKPOINT_IDLE_MS: 10 * 60 * 1000,
 
+    /* A hot file belongs to the browser writing it. Another browser may
+       only fold one it finds abandoned — comfortably longer than the
+       save clock above, so a browser that is merely between keystrokes
+       never looks abandoned to anyone else. */
+    HOT_STALE_MS: 2 * 60 * 1000,
+
+    /* A failed save retries on its own, doubling from here to this
+       ceiling. Without it a single dropped packet parked the docket on
+       "Failed" until somebody noticed the banner. */
+    RETRY_BASE_MS: 2000,
+    RETRY_MAX_MS: 60000,
+
+    /* How often a visible tab re-reads the gist. A tab left open is a tab
+       holding a docket that goes stale the moment another browser writes,
+       and the pull is a conditional request: unchanged costs a 304 with
+       no body and no rate-limit charge. */
+    POLL_MS: 45000,
+
     /* A note taller than this collapses behind an expand control, so one
        pasted file cannot push everything else off the screen. */
     NOTE_COLLAPSE_PX: 260,

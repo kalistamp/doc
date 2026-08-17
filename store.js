@@ -8,7 +8,7 @@
 
    Layout inside the gist:
      docket share.json     cold archive, rewritten at checkpoints
-     docket-hot-<id>       the one note currently being edited
+     docket-hot-<id>       one per browser currently editing a note
      docket-blob-<id>      one file per upload, base64
 
    Blobs are NOT downloaded on load. The gist listing gives us each
@@ -20,6 +20,18 @@
    several changes coalesce into one request, and only one request is
    ever in flight — two overlapping PATCHes can land out of order and
    silently undo each other.
+
+   That queue only orders THIS browser's writes. Two browsers on one
+   gist are two writers with no lock between them, and a whole-archive
+   PATCH built from stale memory replaces the other one's docket
+   wholesale. Three things keep that from happening:
+
+     · a write that rewrites the archive first asks GitHub whether the
+       gist has moved since we last read it, and reconciles if it has;
+     · reconciling is a merge by id and timestamp, with `trash` acting
+       as the tombstone that lets a delete survive the merge;
+     · a hot file is stamped with the client that owns it, so opening a
+       second window no longer deletes the first one's live draft.
    ============================================================ */
 
 (function () {
@@ -31,20 +43,39 @@
     let gistId = readLS(GIST_KEY);
     let listeners = [];
 
+    /* Who this browser is, for the length of this page load. It is only
+       ever compared to itself, so a random handle is enough — no identity,
+       nothing stored, nothing to collide with across devices. */
+    const CLIENT_ID = Math.random().toString(36).slice(2, 10);
+
     /* Dirty flags + the getters that produce a payload when we flush. */
     const dirty = { archive: false, hot: false };
     let pendingBlobs = {};      /* gist filename -> base64 or null (delete) */
     let pendingHotDeletes = {}; /* hot filename -> null */
-    let sources = { data: null };
+    let sources = { data: null, adopt: null };
 
     let activeHotId = null;
     let loadedHotNames = [];
+    let hotOwners = {};         /* hot filename -> { client, savedAt } */
     let checkpointTimer = null;
 
     let flushTimer = null;
     let inFlight = null;
     let lastError = null;
     let dirtySince = 0;
+
+    /* A save that fails is not a save that is abandoned. Nothing rearmed
+       the clock before, so one dropped packet parked the docket on
+       "Failed" until the user noticed and pressed Retry. */
+    let retryTimer = null;
+    let retryDelay = 0;
+
+    /* What GitHub last told us the gist looked like. The etag makes the
+       pre-write check cheap — an unchanged gist answers 304 with no body
+       and no rate-limit cost — and the revision is the same answer for a
+       response that arrives without one. */
+    let etag = '';
+    let headVersion = '';
 
     /* What the last load told us about each blob file, so a download can
        resolve bytes without re-listing the gist. */
@@ -77,6 +108,13 @@
                                         .replace(/\/+$/, '');
         writeLS(TOKEN_KEY, token);
         writeLS(GIST_KEY, gistId);
+        /* A different gist is a different document: nothing we know about
+           the old one may be used to guard a write to the new one. */
+        etag = '';
+        headVersion = '';
+        blobRefs = {};
+        loadedHotNames = [];
+        hotOwners = {};
     }
 
     const api = () => `https://api.github.com/gists/${gistId}`;
@@ -89,10 +127,43 @@
 
     /* ---------- errors ------------------------------------------------ */
 
+    /* Test doubles and 304s arrive without a headers bag; every read of
+       one goes through here so none of them has to care. */
+    function header(res, name) {
+        return (res && res.headers && res.headers.get && res.headers.get(name)) || '';
+    }
+
+    /* GitHub spends 403 on two completely different problems: a token that
+       is not allowed to do this, and a token that has been doing it too
+       often. Telling them apart matters — the first is a setting the user
+       must change, the second fixes itself if we simply wait. */
+    function isRateLimited(res, body) {
+        if (res.status === 429) return true;
+        if (res.status !== 403) return false;
+        if (header(res, 'retry-after')) return true;
+        if (header(res, 'x-ratelimit-remaining') === '0') return true;
+        const msg = String((body && body.message) || '').toLowerCase();
+        return msg.includes('rate limit') || msg.includes('abuse');
+    }
+
+    function retryAfterMs(res) {
+        const after = Number(header(res, 'retry-after'));
+        if (after > 0) return after * 1000;
+        const reset = Number(header(res, 'x-ratelimit-reset'));
+        if (reset > 0) return Math.max(0, reset * 1000 - Date.now());
+        return 0;
+    }
+
     /* GitHub's own wording for a scope problem ("Resource not accessible
        by personal access token") says nothing about how to fix it, and
        it is the single most likely thing to go wrong. */
     function describe(res, body, verb) {
+        if (isRateLimited(res, body)) {
+            const wait = retryAfterMs(res);
+            return 'GitHub is rate-limiting this token' +
+                (wait ? ` — retrying in ${Math.ceil(wait / 1000)}s. ` : ' — retrying shortly. ') +
+                'Several browsers saving into one gist can reach its write limit.';
+        }
         if (res.status === 401) {
             return 'GitHub rejected the token (401). It may be expired or mistyped — check it under Settings → Cloud sync.';
         }
@@ -104,11 +175,31 @@
                 ? 'No gist found for that id (404). Check the Gist ID under Settings → Cloud sync — and that this token can see it.'
                 : 'Cannot write that gist (404). Usually the token lacks Gists → Read and write.';
         }
+        if (res.status === 409) {
+            return 'Another browser wrote to this gist at the same moment (409) — retrying.';
+        }
         if (res.status === 413 || res.status === 422) {
             return `GitHub refused the upload (${res.status}) — the file is likely too large for a gist.`;
         }
         const msg = body && body.message ? ` — ${body.message}` : '';
         return `Sync failed (${res.status})${msg}`;
+    }
+
+    /* Only some failures are worth trying again. A 401 or a missing scope
+       will fail identically forever and retrying it just burns quota. */
+    function failure(res, body, verb) {
+        const err = new Error(describe(res, body, verb));
+        err.status = res.status;
+        err.retryable = res.status >= 500 || res.status === 409 ||
+                        isRateLimited(res, body);
+        err.retryAfter = retryAfterMs(res);
+        return err;
+    }
+
+    function transient(message) {
+        const err = new Error(message);
+        err.retryable = true;
+        return err;
     }
 
     async function readBody(res) {
@@ -166,28 +257,45 @@
         return data;
     }
 
-    async function load() {
-        if (!isConnected()) { emit('offline'); return null; }
+    const revisionOf = (json) =>
+        (Array.isArray(json && json.history) && json.history[0] &&
+         json.history[0].version) || '';
 
-        emit('loading');
+    /**
+     * GET the gist. With `conditional`, ask GitHub to answer 304 when
+     * nothing has changed since we last read or wrote — a 304 carries no
+     * body and no primary rate-limit cost, which is exactly what makes it
+     * affordable to check before every archive write. Returns null for a
+     * 304, meaning "still ours to overwrite".
+     */
+    async function fetchGist(conditional) {
+        const head = headers();
+        if (conditional && etag) head['If-None-Match'] = etag;
+
         let res;
         try {
-            res = await fetch(`${api()}?_=${Date.now()}`, {
-                headers: headers(), cache: 'no-store'
+            res = await fetch(conditional ? api() : `${api()}?_=${Date.now()}`, {
+                headers: head, cache: 'no-store'
             });
         } catch (e) {
-            lastError = 'Could not reach GitHub. Check your connection.';
-            emit('error', lastError);
-            throw new Error(lastError);
+            throw transient('Could not reach GitHub. Check your connection.');
         }
-        if (!res.ok) {
-            const err = new Error(describe(res, await readBody(res), 'read'));
-            lastError = err.message;
-            emit('error', err.message);
-            throw err;
-        }
+        if (res.status === 304) return null;
+        if (!res.ok) throw failure(res, await readBody(res), 'read');
 
+        const tag = header(res, 'etag');
+        if (tag) etag = tag;
         const json = await res.json();
+        headVersion = revisionOf(json) || headVersion;
+        return json;
+    }
+
+    /**
+     * One parsed view of a gist response: the archive with any hot notes
+     * overlaid, plus the bookkeeping a later write needs. load() and the
+     * pre-write guard share it so both reconcile identically.
+     */
+    async function absorb(json) {
         const files = json.files || {};
 
         /* Keep every blob's handle; fetch none of them. */
@@ -204,25 +312,134 @@
                 data = JSON.parse(text || '{}') || {};
             } catch (e) { data = {}; }
         }
-
         data = normalise(data);
+
         const hotNames = Object.keys(files).filter((name) => name.startsWith(CFG.HOT_PREFIX));
-        const hotRecords = [];
+        const records = [];
+        const owners = {};
         await Promise.all(hotNames.map(async (name) => {
             try {
                 const parsed = JSON.parse(await entryText(files[name]) || '{}');
                 const note = parsed && parsed.note ? parsed.note : parsed;
-                if (note && note.id != null) hotRecords.push({ note });
+                owners[name] = {
+                    client: (parsed && parsed.client) || '',
+                    savedAt: Date.parse((parsed && parsed.savedAt) || '') || 0
+                };
+                if (note && note.id != null) records.push({ note });
             } catch (e) { /* a partial hot file cannot override the archive */ }
         }));
-        loadedHotNames = hotNames;
-        overlayHot(data, hotRecords);
+        overlayHot(data, records);
 
+        loadedHotNames = hotNames;
+        hotOwners = owners;
+        lastHistory = Array.isArray(json.history) ? json.history : [];
+        return data;
+    }
+
+    async function load() {
+        if (!isConnected()) { emit('offline'); return null; }
+
+        emit('loading');
+        let json;
+        try {
+            json = await fetchGist(false);
+        } catch (e) {
+            lastError = e.message;
+            emit('error', e.message);
+            throw e;
+        }
+
+        const data = await absorb(json);
         lastError = null;
         emit('synced');
-        lastHistory = Array.isArray(json.history) ? json.history : [];
-
         return data;
+    }
+
+    /* ---------- merge --------------------------------------------------- */
+
+    /* Two browsers hold two whole dockets, and a write has to combine them
+       rather than pick one. Items reconcile by id on their own timestamp.
+       A deletion is not an absence — it is an entry in `trash` — which is
+       what lets a delete made on one machine survive being merged with a
+       machine that still has the item sitting in its list. */
+
+    const stampOf = (item) =>
+        Date.parse((item && (item.updated || item.added || item.created)) || '') || 0;
+    const binnedAt = (entry) =>
+        Date.parse((entry && entry.deletedAt) || '') || 0;
+
+    function mergeCollection(remote, local, graves) {
+        const out = [];
+        const at = new Map();
+        const take = (item) => {
+            if (!item || item.id == null) return;
+            const id = String(item.id);
+            const index = at.get(id);
+            if (index == null) { at.set(id, out.length); out.push(item); }
+            else if (stampOf(item) >= stampOf(out[index])) out[index] = item;
+        };
+        /* Local goes second, and a tie goes to whoever went second, so the
+           browser doing the reconciling keeps its own copy when neither
+           side is newer. That is what carries a change which deliberately
+           does not bump `updated` — pinning, above all — across a merge
+           instead of losing it to an identically dated remote copy. */
+        (remote || []).forEach(take);
+        (local || []).forEach(take);
+
+        /* A tombstone wins unless the item was edited after it was binned.
+           Deleting on one machine while editing on another is a conflict
+           like any other, and it resolves the same way: last write wins. */
+        return out.filter((item) => {
+            const grave = graves.get(String(item.id));
+            return !grave || stampOf(item) > grave;
+        });
+    }
+
+    function mergeTrash(remote, local) {
+        const at = new Map();
+        [].concat(remote || [], local || []).forEach((entry) => {
+            if (!entry || !entry.item || entry.item.id == null) return;
+            const id = String(entry.item.id);
+            const kept = at.get(id);
+            if (!kept) { at.set(id, entry); return; }
+
+            /* The earliest deletion is the one that actually happened; a
+               purge is sticky, because the whole point of the stripped
+               tombstone it leaves is to stop the item coming back. */
+            const a = binnedAt(kept);
+            const b = binnedAt(entry);
+            const earlier = (b && (!a || b < a)) ? entry : kept;
+            at.set(id, (kept.purged || entry.purged)
+                ? { kind: earlier.kind, item: { id: earlier.item.id },
+                    deletedAt: earlier.deletedAt, purged: true }
+                : earlier);
+        });
+        return Array.from(at.values())
+            .sort((x, y) => binnedAt(y) - binnedAt(x));
+    }
+
+    /** Reconcile a remote docket with a local one. Pure — it reads neither
+     *  and returns a third. */
+    function mergeDocket(remote, local) {
+        const a = normalise(remote);
+        const b = normalise(local);
+        const trash = mergeTrash(a.trash, b.trash);
+        const graves = new Map(trash.map((t) => [String(t.item.id), binnedAt(t)]));
+
+        const merged = {
+            notes: mergeCollection(a.notes, b.notes, graves),
+            files: mergeCollection(a.files, b.files, graves),
+            folders: mergeCollection(a.folders, b.folders, graves),
+            trash
+        };
+
+        /* An item edited back out of the trash takes its tombstone with it,
+           or the next merge would bin it all over again. */
+        const alive = new Set([]
+            .concat(merged.notes, merged.files, merged.folders)
+            .map((item) => String(item.id)));
+        merged.trash = merged.trash.filter((t) => !alive.has(String(t.item.id)));
+        return merged;
     }
 
     /* ---------- blobs -------------------------------------------------- */
@@ -268,10 +485,15 @@
 
     /* ---------- save ---------------------------------------------------- */
 
-    /** The store pulls from this at flush time rather than being handed a
-     *  snapshot when the change happens, so a burst of edits always
-     *  uploads the latest state instead of a stale one. */
-    function bind(dataSource) { sources.data = dataSource; }
+    /** The store pulls from `read` at flush time rather than being handed a
+     *  snapshot when the change happens, so a burst of edits always uploads
+     *  the latest state instead of a stale one. `adopt` is the other
+     *  direction: the store calls it with a reconciled docket when a read
+     *  finds the gist has moved under us. */
+    function bind(read, adopt) {
+        sources.data = read;
+        sources.adopt = adopt || null;
+    }
 
     const hotName = (id) => `${CFG.HOT_PREFIX}${encodeURIComponent(String(id))}`;
 
@@ -290,9 +512,21 @@
 
         emit('dirty');
         if (!dirtySince) dirtySince = Date.now();
+        /* A fresh edit supersedes a pending retry: the flush it is about to
+           trigger carries the failed work up with it. */
+        clearTimeout(retryTimer);
+        retryTimer = null;
         clearTimeout(flushTimer);
         if (Date.now() - dirtySince >= CFG.MAX_SAVE_WAIT_MS) { flush(); return; }
         flushTimer = setTimeout(flush, CFG.SAVE_DEBOUNCE_MS);
+    }
+
+    function scheduleRetry(err) {
+        clearTimeout(retryTimer);
+        const wait = (err && err.retryAfter) ||
+            (retryDelay ? Math.min(retryDelay * 2, CFG.RETRY_MAX_MS) : CFG.RETRY_BASE_MS);
+        retryDelay = Math.min(wait, CFG.RETRY_MAX_MS);
+        retryTimer = setTimeout(() => { retryTimer = null; flush(); }, retryDelay);
     }
 
     function queueHotDelete(id) {
@@ -338,12 +572,25 @@
         return true;
     }
 
-    /* load() cannot fold immediately: its caller must first install the
+    /* Fold the hot files a load turned up — but only the ones it is ours to
+       fold. A hot file another browser is still writing into is that
+       browser's unsaved draft, and deleting it because we happened to open
+       the app is how a second window destroys the first one's work. Ours,
+       files from a build that stamped no owner, and genuinely abandoned
+       ones still fold, so crash recovery is unaffected.
+
+       load() cannot fold immediately: its caller must first install the
        reconciled notes into the bound data source. */
     function foldLoadedHot() {
-        if (!loadedHotNames.length) return false;
-        loadedHotNames.forEach((name) => { pendingHotDeletes[name] = null; });
+        const foldable = loadedHotNames.filter((name) => {
+            const owner = hotOwners[name] || {};
+            if (!owner.client || owner.client === CLIENT_ID) return true;
+            return Boolean(owner.savedAt) &&
+                   Date.now() - owner.savedAt > CFG.HOT_STALE_MS;
+        });
         loadedHotNames = [];
+        if (!foldable.length) return false;
+        foldable.forEach((name) => { pendingHotDeletes[name] = null; });
         dirty.archive = true;
         schedule();
         return true;
@@ -352,6 +599,22 @@
     const hasPending = () =>
         dirty.archive || dirty.hot || Object.keys(pendingHotDeletes).length > 0 ||
         Object.keys(pendingBlobs).length > 0 || !!inFlight;
+
+    /**
+     * Ask whether the gist moved under us, and reconcile if it did.
+     *
+     * Only ever called before a write that rewrites the whole archive,
+     * because that is the only payload capable of undoing another
+     * browser's work. Hot files are named per note and per writer, and
+     * blobs per upload, so those need no guard and stay at one request.
+     */
+    async function reconcile() {
+        if (!sources.adopt || !sources.data) return;
+        const json = await fetchGist(true);
+        if (!json) return;                    /* 304 — nothing moved */
+        const remote = await absorb(json);
+        sources.adopt(mergeDocket(remote, sources.data()));
+    }
 
     async function flush(options) {
         clearTimeout(flushTimer);
@@ -362,7 +625,6 @@
 
         const sendArchive = dirty.archive;
         const sendHotId = dirty.hot ? activeHotId : null;
-        const sendHotNote = sendHotId != null ? sourceNote(sendHotId) : null;
         const sendHotDeletes = pendingHotDeletes;
         const sendBlobs = pendingBlobs;
         dirty.archive = false;
@@ -371,54 +633,87 @@
         pendingBlobs = {};
         dirtySince = 0;
 
-        const payload = {};
-        if (sendArchive && sources.data) {
-            payload[CFG.DATA_FILE] = { content: JSON.stringify(sources.data(), null, 2) };
-        }
-        Object.keys(sendHotDeletes).forEach((name) => { payload[name] = null; });
-        if (sendHotNote) {
-            payload[hotName(sendHotId)] = { content: JSON.stringify({
-                version: 1, savedAt: new Date().toISOString(), note: sendHotNote
-            }) };
-        } else if (sendHotId != null) {
-            payload[hotName(sendHotId)] = null;
-        }
-        Object.keys(sendBlobs).forEach((name) => {
-            /* null content is how the gist API deletes a file. */
-            payload[name] = sendBlobs[name] === null ? null : { content: sendBlobs[name] };
-        });
+        /* Put the work back — the change is still unsaved, and the next
+           edit, the retry timer or the Retry button should carry it up
+           again. Reachable from the guard read as well as the write, so
+           neither can drop a pending change on the floor. */
+        const restore = () => {
+            dirty.archive = dirty.archive || sendArchive;
+            if (sendHotId != null && activeHotId === sendHotId) dirty.hot = true;
+            pendingHotDeletes = Object.assign({}, sendHotDeletes, pendingHotDeletes);
+            pendingBlobs = Object.assign({}, sendBlobs, pendingBlobs);
+        };
+
+        /* An unload has no time for a round trip, so it writes unguarded
+           and accepts last-write-wins for whatever is still dirty. */
+        const guarded = sendArchive && !(options && options.unguarded);
 
         emit('saving');
         inFlight = (async () => {
-            const res = await fetch(api(), {
-                method: 'PATCH', headers: headers(),
-                body: JSON.stringify({ files: payload }),
-                keepalive: Boolean(options && options.keepalive)
-            });
-            if (!res.ok) {
-                /* Put the work back — the change is still unsaved, and the
-                   next edit or Retry should carry it up again. */
-                dirty.archive = dirty.archive || sendArchive;
-                if (sendHotId != null && activeHotId === sendHotId) dirty.hot = true;
-                pendingHotDeletes = Object.assign({}, sendHotDeletes, pendingHotDeletes);
-                pendingBlobs = Object.assign({}, sendBlobs, pendingBlobs);
-                throw new Error(describe(res, await readBody(res), 'write'));
+            try {
+                if (guarded) await reconcile();
+
+                /* Built after the merge, so what goes up is the reconciled
+                   docket rather than the one we walked in with. */
+                const payload = {};
+                if (sendArchive && sources.data) {
+                    payload[CFG.DATA_FILE] = { content: JSON.stringify(sources.data(), null, 2) };
+                }
+                Object.keys(sendHotDeletes).forEach((name) => { payload[name] = null; });
+
+                const sendHotNote = sendHotId != null ? sourceNote(sendHotId) : null;
+                if (sendHotNote) {
+                    payload[hotName(sendHotId)] = { content: JSON.stringify({
+                        version: 1, client: CLIENT_ID,
+                        savedAt: new Date().toISOString(), note: sendHotNote
+                    }) };
+                } else if (sendHotId != null) {
+                    payload[hotName(sendHotId)] = null;
+                }
+                Object.keys(sendBlobs).forEach((name) => {
+                    /* null content is how the gist API deletes a file. */
+                    payload[name] = sendBlobs[name] === null ? null : { content: sendBlobs[name] };
+                });
+
+                let res;
+                try {
+                    res = await fetch(api(), {
+                        method: 'PATCH', headers: headers(),
+                        body: JSON.stringify({ files: payload }),
+                        keepalive: Boolean(options && options.keepalive)
+                    });
+                } catch (e) {
+                    throw transient('Could not reach GitHub. Check your connection.');
+                }
+                if (!res.ok) throw failure(res, await readBody(res), 'write');
+
+                /* Our own write moved the gist; record where to, so the next
+                   guard read can answer 304 instead of pulling the lot. */
+                const tag = header(res, 'etag');
+                if (tag) etag = tag;
+                const json = await readBody(res);
+                if (json && Array.isArray(json.history)) lastHistory = json.history;
+                headVersion = revisionOf(json) || headVersion;
+
+                /* Written blobs are now readable straight from the gist. */
+                Object.keys(sendBlobs).forEach((name) => {
+                    if (sendBlobs[name] !== null) blobRefs[name] = { content: sendBlobs[name] };
+                });
+            } catch (e) {
+                restore();
+                throw e;
             }
-            const json = await readBody(res);
-            if (json && Array.isArray(json.history)) lastHistory = json.history;
-            /* Written blobs are now readable straight from the gist. */
-            Object.keys(sendBlobs).forEach((name) => {
-                if (sendBlobs[name] !== null) blobRefs[name] = { content: sendBlobs[name] };
-            });
         })();
 
         try {
             await inFlight;
             lastError = null;
+            retryDelay = 0;
             emit('synced');
         } catch (e) {
             lastError = e.message;
             emit('error', e.message);
+            if (e.retryable) scheduleRetry(e);
         } finally {
             inFlight = null;
         }
@@ -467,7 +762,7 @@
      *  the caller decides what to do with what comes back. */
     async function atVersion(sha) {
         const res = await fetch(`${api()}/${sha}`, { headers: headers(), cache: 'no-store' });
-        if (!res.ok) throw new Error(describe(res, await readBody(res), 'read'));
+        if (!res.ok) throw failure(res, await readBody(res), 'read');
         const json = await res.json();
         const entry = (json.files || {})[CFG.DATA_FILE];
         if (!entry) throw new Error('That revision has no docket in it.');
@@ -481,7 +776,14 @@
         load, bind, touchData, touchNote, checkpoint, foldLoadedHot, flush,
         history, atVersion,
         getBlob, putBlob, dropBlob,
-        retry: () => { lastError = null; flush(); },
+        merge: mergeDocket,
+        retry: () => {
+            clearTimeout(retryTimer);
+            retryTimer = null;
+            retryDelay = 0;
+            lastError = null;
+            flush();
+        },
         onStatus: (fn) => listeners.push(fn),
         hasPending,
         lastError: () => lastError,
