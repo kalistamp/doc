@@ -598,6 +598,9 @@ a { color: var(--accent); }
     margin-bottom: 1.3rem;
 }
 
+.view-controls { display: flex; align-items: center; gap: .55rem; }
+.view-controls .sort { flex: 1 1 auto; }
+
 /* Sort control. Styled as a quiet pill rather than a native select so it
    sits beside the buttons without shouting. */
 .sort {
@@ -673,6 +676,32 @@ a { color: var(--accent); }
 .note-grid {
     columns: 300px;
     column-gap: 1.1rem;
+}
+
+/* Explorer-style local views. Medium is the original layout; compact fits
+   more notes on screen, while large gives each note more reading room. */
+#panel-notes[data-note-view="compact"] .note-grid {
+    columns: 220px;
+    column-gap: .75rem;
+}
+#panel-notes[data-note-view="compact"] .note { margin-bottom: .75rem; }
+#panel-notes[data-note-view="compact"] .note-title {
+    padding: .72rem .8rem .42rem;
+    font-size: 1rem;
+}
+#panel-notes[data-note-view="compact"] .note-body { padding: .35rem .8rem .72rem; }
+
+#panel-notes[data-note-view="large"] .note-grid {
+    columns: 440px;
+    column-gap: 1.35rem;
+}
+#panel-notes[data-note-view="large"] .note-title {
+    padding: 1.15rem 1.2rem .7rem;
+    font-size: 1.22rem;
+}
+#panel-notes[data-note-view="large"] .note-body {
+    padding: .55rem 1.2rem 1.15rem;
+    font-size: 1rem;
 }
 
 /* Programmatic focus/scroll lands at the writing controls with breathing
@@ -1262,11 +1291,14 @@ code {
     .search { max-width: none; flex-basis: 100%; }
     .panel-bar .btn { flex: 1; }
     .panel-bar .sort { flex-basis: 100%; }
+    #panel-notes .view-controls { flex: 1 1 100%; }
+    #panel-notes .view-controls .sort { flex: 1 1 0; min-width: 0; }
     .panel-bar .spacer { display: none; }
 
     /* One column: `columns: 1` rather than a width, so a card never gets
        narrower than the screen on a small phone. */
-    .note-grid { columns: 1; }
+    .note-grid,
+    #panel-notes[data-note-view] .note-grid { columns: 1; }
 
     .connect-card { flex-wrap: wrap; }
     .connect-card .btn { width: 100%; }

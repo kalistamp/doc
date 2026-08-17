@@ -30,7 +30,8 @@
     const LS = {
         notes: 'docket.notes', files: 'docket.files', folders: 'docket.folders',
         trash: 'docket.trash', active: 'docket.activeFolder',
-        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort'
+        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort',
+        noteView: 'docket.noteView'
     };
 
     let notes = [];
@@ -143,6 +144,7 @@
             activeFolder = localStorage.getItem(LS.active) || null;
             el('note-sort').value = localStorage.getItem(LS.noteSort) || 'updated';
             el('file-sort').value = localStorage.getItem(LS.fileSort) || 'added';
+            applyNoteView(localStorage.getItem(LS.noteView) || 'medium');
         } catch (e) {}
     }
 
@@ -408,10 +410,22 @@
         try { localStorage.setItem(LS.noteSort, el('note-sort').value); } catch (e) {}
         renderNotes();
     });
+    el('note-view').addEventListener('change', () => {
+        const view = applyNoteView(el('note-view').value);
+        try { localStorage.setItem(LS.noteView, view); } catch (e) {}
+        renderNotes();
+    });
     el('file-sort').addEventListener('change', () => {
         try { localStorage.setItem(LS.fileSort, el('file-sort').value); } catch (e) {}
         renderFiles();
     });
+
+    function applyNoteView(value) {
+        const view = ['compact', 'medium', 'large'].includes(value) ? value : 'medium';
+        el('note-view').value = view;
+        el('panel-notes').dataset.noteView = view;
+        return view;
+    }
 
     /* ============================================================
        FOLDERS
@@ -747,7 +761,10 @@
     function sizeCard(card) {
         const n = findNote(card.dataset.id);
         if (!n) return;
-        const limit = CFG.NOTE_COLLAPSE_PX;
+        const view = el('note-view').value || 'medium';
+        const metrics = CFG.NOTE_VIEW_HEIGHTS && CFG.NOTE_VIEW_HEIGHTS[view] || {};
+        const limit = metrics.collapse || CFG.NOTE_COLLAPSE_PX;
+        const minimum = metrics.minimum || 96;
         let clamped;
 
         if (isList(n)) {
@@ -760,7 +777,7 @@
             ta.style.height = 'auto';
             const full = ta.scrollHeight;
             clamped = full > limit;
-            ta.style.height = `${clamped ? limit : Math.max(full, 96)}px`;
+            ta.style.height = `${clamped ? limit : Math.max(full, minimum)}px`;
         }
 
         card.classList.toggle('is-clamped', clamped);

@@ -38,6 +38,10 @@ uploads wait until you have connected one.
 They autosave about a second after you stop typing, and can be sorted by
 recently updated, recently created or title.
 
+The Notes toolbar also offers **Compact**, **Medium**, and **Large** views.
+Compact fits more cards on screen, Medium is the default, and Large gives
+each note more width and visible text. The preference stays on that device.
+
 Leave the title blank and the card borrows its first line — shown only, never
 written back, so typing a real title still just works.
 

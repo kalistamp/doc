@@ -36,3 +36,15 @@ test('new notes focus and smoothly reveal the exact created card', () => {
     assert.match(app, /el\('search'\)\.value = ''/);
     assert.match(css, /\.note-title\s*\{\s*scroll-margin-block:/);
 });
+
+test('compact, medium and large note views are persistent and resize cards', () => {
+    assert.match(html, /id="note-view"/);
+    assert.match(html, /value="compact"/);
+    assert.match(html, /value="medium"/);
+    assert.match(html, /value="large"/);
+    assert.match(app, /noteView: 'docket\.noteView'/);
+    assert.match(app, /localStorage\.setItem\(LS\.noteView, view\)/);
+    assert.match(app, /dataset\.noteView = view/);
+    assert.match(css, /data-note-view="compact"/);
+    assert.match(css, /data-note-view="large"/);
+});

@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=7">
+<link rel="stylesheet" href="./style.css?v=8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
 </head>
 <body>
@@ -169,12 +169,20 @@
         <!-- ---------------- NOTES ---------------- -->
         <section id="panel-notes" class="panel is-active" role="tabpanel">
             <div class="panel-bar">
-                <label class="sr-only" for="note-sort">Sort notes</label>
-                <select id="note-sort" class="sort">
-                    <option value="updated">Recently updated</option>
-                    <option value="created">Recently created</option>
-                    <option value="title">Title A–Z</option>
-                </select>
+                <div class="view-controls">
+                    <label class="sr-only" for="note-sort">Sort notes</label>
+                    <select id="note-sort" class="sort">
+                        <option value="updated">Recently updated</option>
+                        <option value="created">Recently created</option>
+                        <option value="title">Title A–Z</option>
+                    </select>
+                    <label class="sr-only" for="note-view">Note view</label>
+                    <select id="note-view" class="sort" aria-label="Note view">
+                        <option value="compact">Compact view</option>
+                        <option value="medium" selected>Medium view</option>
+                        <option value="large">Large view</option>
+                    </select>
+                </div>
                 <span class="spacer"></span>
                 <button id="new-list-btn" class="btn btn-ghost" type="button">
                     <svg class="ico"><use href="#i-list"></use></svg> New list
@@ -417,8 +425,8 @@
     </button>
 </div>
 
-<script src="./config.js?v=7"></script>
-<script src="./store.js?v=7"></script>
-<script src="./app.js?v=7"></script>
+<script src="./config.js?v=8"></script>
+<script src="./store.js?v=8"></script>
+<script src="./app.js?v=8"></script>
 </body>
 </html>

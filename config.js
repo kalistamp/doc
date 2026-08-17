@@ -55,6 +55,14 @@ window.DOCKET_CONFIG = {
        pasted file cannot push everything else off the screen. */
     NOTE_COLLAPSE_PX: 260,
 
+    /* Card height follows the local view preference. Width is controlled in
+       CSS; these values keep the visible amount of note text proportional. */
+    NOTE_VIEW_HEIGHTS: {
+        compact: { collapse: 160, minimum: 72 },
+        medium:  { collapse: 260, minimum: 96 },
+        large:   { collapse: 420, minimum: 140 }
+    },
+
     /* Deleted items sit in the trash this long before being purged on the
        next load. Long enough to notice a mistake a week later. */
     TRASH_DAYS: 30,
