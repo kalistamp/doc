@@ -30,8 +30,7 @@
     const LS = {
         notes: 'docket.notes', files: 'docket.files', folders: 'docket.folders',
         trash: 'docket.trash', active: 'docket.activeFolder',
-        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort',
-        noteView: 'docket.noteView'
+        noteSort: 'docket.noteSort', fileSort: 'docket.fileSort'
     };
 
     let notes = [];
@@ -47,14 +46,6 @@
        base36 only. */
     const UNFILED = '__unfiled__';
     let activeFolder = null;
-
-    /* How much of each note the board shows: the full card, a shorter
-       card, or a two-line row. Kept in localStorage and NOT in the gist —
-       like the theme, it is a property of the screen you are looking at,
-       and syncing it would have a phone and a desktop overwrite each
-       other's choice all day. */
-    const VIEWS = ['cards', 'compact', 'list'];
-    let noteView = 'cards';
 
     /* ============================================================
        HELPERS
@@ -152,15 +143,19 @@
             activeFolder = localStorage.getItem(LS.active) || null;
             el('note-sort').value = localStorage.getItem(LS.noteSort) || 'updated';
             el('file-sort').value = localStorage.getItem(LS.fileSort) || 'added';
-            const view = localStorage.getItem(LS.noteView);
-            if (VIEWS.includes(view)) noteView = view;
         } catch (e) {}
     }
 
-    /* Every mutation goes through here: cache locally, then queue a push. */
+    /* Structural mutations checkpoint the cold archive. Note keystrokes use
+       durableNote instead, so their save clock only writes one hot file. */
     function commit() {
         cache();
         Store.touchData();
+    }
+
+    function durableNote(note) {
+        cache();
+        Store.touchNote(note.id);
     }
 
     /* ============================================================
@@ -201,6 +196,7 @@
     });
 
     el('lock-btn').addEventListener('click', async () => {
+        Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
         location.reload();
     });
@@ -234,13 +230,25 @@
             purgeTrash();
             cache();
             renderAll();
+            /* Any hot file recovered above is now represented in `notes`.
+               Fold it into the archive and remove the crash-recovery file. */
+            Store.foldLoadedHot();
         } catch (err) { /* onStatus already surfaced it */ }
     }
 
     function mergeById(remote, local) {
         const out = remote.slice();
-        const seen = new Set(remote.map((r) => r.id));
-        local.forEach((l) => { if (!seen.has(l.id)) out.push(l); });
+        const positions = new Map(remote.map((item, index) => [String(item.id), index]));
+        const time = (item) => new Date(item.updated || item.added || item.created || 0).getTime() || 0;
+        local.forEach((item) => {
+            const index = positions.get(String(item.id));
+            if (index == null) {
+                positions.set(String(item.id), out.length);
+                out.push(item);
+            } else if (time(item) > time(out[index])) {
+                out[index] = item;
+            }
+        });
         return out;
     }
 
@@ -288,6 +296,7 @@
        manual "get me level with the other machine" button. */
     el('sync-pill').addEventListener('click', async () => {
         if (!Store.isConnected()) { openSettings(); return; }
+        Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
         await pullFromGist();
     });
@@ -304,7 +313,22 @@
 
     /* Last line of defence against closing the tab on an unsaved edit. */
     window.addEventListener('beforeunload', (e) => {
+        if (unlocked) {
+            Store.checkpoint();
+            /* keepalive gives supporting browsers a chance to finish the
+               final semantic checkpoint while the page is unloading. */
+            Store.flush({ keepalive: true });
+        }
         if (unlocked && Store.hasPending()) { e.preventDefault(); e.returnValue = ''; }
+    });
+
+    /* Switching browser tabs is also an editing boundary. Unlike unload,
+       visibility changes leave enough time for the queued checkpoint to
+       complete normally. */
+    document.addEventListener('visibilitychange', () => {
+        if (!unlocked || document.visibilityState !== 'hidden') return;
+        Store.checkpoint();
+        if (Store.hasPending()) Store.flush({ keepalive: true });
     });
 
     /* ============================================================
@@ -314,6 +338,7 @@
     const activeTab = () => document.querySelector('.tab.is-active').dataset.tab;
 
     function showTab(name) {
+        Store.checkpoint();
         document.querySelectorAll('.tab').forEach((t) => {
             const on = t.dataset.tab === name;
             t.classList.toggle('is-active', on);
@@ -327,6 +352,7 @@
            what you came here to find. */
         el('folder-bar').hidden = name === 'trash';
         renderFolders();
+        applyFilters();
     }
 
     document.querySelectorAll('.tab').forEach((tab) =>
@@ -354,8 +380,13 @@
     };
     const matchesFile = (f) => {
         const q = query();
-        return !q || f.name.toLowerCase().includes(q);
+        return !q || String(f.name || '').toLowerCase().includes(q);
     };
+
+    function applyFilters() {
+        applyNoteFilters();
+        applyFileFilters();
+    }
 
     const NOTE_SORTS = {
         updated: (a, b) => new Date(b.updated || 0) - new Date(a.updated || 0),
@@ -368,7 +399,10 @@
         size: (a, b) => (b.size || 0) - (a.size || 0)
     };
 
-    el('search').addEventListener('input', () => { renderNotes(); renderFiles(); });
+    el('search').addEventListener('input', () => {
+        renderFolders();
+        applyFilters();
+    });
 
     el('note-sort').addEventListener('change', () => {
         try { localStorage.setItem(LS.noteSort, el('note-sort').value); } catch (e) {}
@@ -414,19 +448,21 @@
         } catch (e) {}
         if (quiet) return;
         renderFolders();
-        renderNotes();
-        renderFiles();
+        applyFilters();
     }
 
     /* Counts follow the tab you are on: "Work 3" means three notes while
        you are reading notes, three files while you are reading files. */
     function folderCount(id) {
         const pool = activeTab() === 'files' ? files : notes;
-        return pool.filter((i) => (id === UNFILED ? !i.folder : i.folder === id)).length;
+        const matches = activeTab() === 'files' ? matchesFile : matchesNote;
+        return pool.filter(matches)
+            .filter((i) => (id === UNFILED ? !i.folder : i.folder === id)).length;
     }
 
     function renderFolders() {
-        const pool = activeTab() === 'files' ? files : notes;
+        const matches = activeTab() === 'files' ? matchesFile : matchesNote;
+        const pool = (activeTab() === 'files' ? files : notes).filter(matches);
         const unfiled = pool.filter((i) => !i.folder).length;
 
         const chip = (id, label, count, own) => `
@@ -582,47 +618,19 @@
        NOTES
        ============================================================ */
 
-    const findNote = (id) => notes.find((n) => n.id === id);
+    const findNote = (id) => notes.find((n) => String(n.id) === String(id));
 
     /* Pinned notes are pulled into their own band above the rest, sorted
        by when you pinned them. In a masonry flow they would otherwise be
        scattered down the first column, which is the opposite of what
        pinning is for. */
     function splitNotes() {
-        const visible = notes.filter(inActiveFolder).filter(matchesNote);
         const cmp = NOTE_SORTS[el('note-sort').value] || NOTE_SORTS.updated;
-        const pinned = visible.filter((n) => n.pinned)
+        const pinned = notes.filter((n) => n.pinned)
             .sort((a, b) => new Date(b.pinnedAt || b.updated || 0) - new Date(a.pinnedAt || a.updated || 0));
-        const rest = visible.filter((n) => !n.pinned).sort(cmp);
-        return { pinned, rest, total: visible.length };
+        const rest = notes.filter((n) => !n.pinned).sort(cmp);
+        return { pinned, rest };
     }
-
-    /* ---- view: cards / compact / list ---------------------------------- */
-
-    function setNoteView(view) {
-        if (!VIEWS.includes(view) || view === noteView) return;
-        noteView = view;
-        try { localStorage.setItem(LS.noteView, view); } catch (e) {}
-        renderNotes();
-    }
-
-    /* Both grids carry the view as a class, so the whole difference between
-       compact and cards is CSS; only the list swaps the markup out. */
-    function paintView() {
-        document.querySelectorAll('#view-switch [data-view]').forEach((b) => {
-            const on = b.dataset.view === noteView;
-            b.classList.toggle('is-on', on);
-            b.setAttribute('aria-pressed', String(on));
-        });
-        ['pinned-grid', 'note-grid'].forEach((id) => {
-            el(id).className = `note-grid view-${noteView}`;
-        });
-    }
-
-    el('view-switch').addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-view]');
-        if (btn) setNoteView(btn.dataset.view);
-    });
 
     function noteCard(n) {
         const derived = !((n.title || '').trim()) && derivedTitle(n);
@@ -632,7 +640,7 @@
 
         return `
             <article class="note${n.pinned ? ' is-pinned' : ''}${isList(n) ? ' is-list' : ''}"
-                     data-id="${n.id}">
+                     data-id="${esc(n.id)}">
                 <input class="note-title${derived ? ' is-derived' : ''}" type="text"
                        value="${esc(n.title || '')}"
                        placeholder="${esc(derived || 'Untitled')}"
@@ -692,72 +700,12 @@
             </div>`;
     }
 
-    /* The list row: a title, a meta line, and no editor at all. There is no
-       room in two lines for a textarea, so opening a row goes straight to
-       the focus view — which is the better place to write anyway, and on a
-       phone it is a full-screen sheet.
-
-       The stamp keeps its own span rather than being baked into the meta
-       string, because the minute tick rewrites that element's text and
-       would otherwise wipe the line count and folder along with it. */
-    function noteRow(n) {
-        const bits = [];
-        if (isList(n)) {
-            const items = n.items || [];
-            bits.push(`${items.filter((i) => i.done).length}/${items.length} done`);
-        } else {
-            const lines = lineCount(n.body);
-            if (lines) bits.push(`${lines.toLocaleString()} line${lines === 1 ? '' : 's'}`);
-        }
-        if (n.folder) bits.push(folderName(n.folder));
-
-        return `
-            <article class="note note-row${n.pinned ? ' is-pinned' : ''}" data-id="${n.id}">
-                <button class="row-open" type="button" aria-label="Open ${esc(titleOf(n))}">
-                    <span class="row-icon" aria-hidden="true">
-                        <svg class="ico"><use href="#i-${isList(n) ? 'list' : 'note'}"></use></svg>
-                    </span>
-                    <span class="row-main">
-                        <span class="row-title">${esc(titleOf(n))}</span>
-                        <span class="row-meta"><span class="note-stamp">${esc(relTime(n.updated))}</span>${
-                            bits.length ? ` · ${esc(bits.join(' · '))}` : ''}</span>
-                    </span>
-                </button>
-                <div class="row-acts">
-                    <button class="note-act note-folder${n.folder ? ' is-set' : ''}" type="button"
-                            title="${n.folder ? `In “${esc(folderName(n.folder))}” — move` : 'Move to a folder'}"
-                            aria-label="Move to folder">
-                        <svg class="ico"><use href="#i-folder"></use></svg>
-                    </button>
-                    <button class="note-act act-pin${n.pinned ? ' is-on' : ''}" type="button"
-                            title="${n.pinned ? 'Unpin' : 'Pin to top'}"
-                            aria-label="${n.pinned ? 'Unpin note' : 'Pin note'}">
-                        <svg class="ico"><use href="#i-pin"></use></svg>
-                    </button>
-                    <button class="note-act act-del" type="button" title="Delete note"
-                            aria-label="Delete note">
-                        <svg class="ico"><use href="#i-trash"></use></svg>
-                    </button>
-                </div>
-            </article>`;
-    }
-
     function renderNotes() {
-        const { pinned, rest, total } = splitNotes();
-        paintView();
+        const { pinned, rest } = splitNotes();
 
-        el('count-notes').textContent = query()
-            ? `${total}` : `${notes.length}`;
         el('notes-empty').hidden = notes.length !== 0;
-        el('note-none').hidden = !(total === 0 && notes.length > 0);
-
-        el('pinned-wrap').hidden = pinned.length === 0;
-        el('others-title').hidden = rest.length === 0;
-        const shape = noteView === 'list' ? noteRow : noteCard;
-        el('pinned-grid').innerHTML = pinned.map(shape).join('');
-        el('note-grid').innerHTML = rest.map(shape).join('');
-
-        if (noteView === 'list') return;   /* a row has no body to fill or size */
+        el('pinned-grid').innerHTML = pinned.map(noteCard).join('');
+        el('note-grid').innerHTML = rest.map(noteCard).join('');
 
         /* Bodies are assigned, not interpolated into the markup. The HTML
            parser drops a leading newline inside <textarea>, so a note that
@@ -770,17 +718,36 @@
             if (ta) ta.value = n.body || '';
             sizeCard(card);
         });
+        applyNoteFilters();
     }
 
-    /* Grow a card to fit its content, but only up to the ceiling for the
-       current view. Past that it clamps and grows an Expand control
-       instead — one pasted file should not push every other note off the
-       screen. A list row has neither body nor ceiling, so it exits here. */
+    /* Search and folder selection only change visibility. Cards remain the
+       same DOM nodes, preserving carets and avoiding sizeCard/layout reads
+       on the app's highest-frequency path. */
+    function applyNoteFilters() {
+        let total = 0, pinned = 0, rest = 0;
+        document.querySelectorAll('.note').forEach((card) => {
+            const note = findNote(card.dataset.id);
+            const shown = Boolean(note && inActiveFolder(note) && matchesNote(note));
+            card.classList.toggle('is-filtered', !shown);
+            if (shown) {
+                total++;
+                if (note.pinned) pinned++; else rest++;
+            }
+        });
+        el('count-notes').textContent = String(total);
+        el('pinned-wrap').hidden = pinned === 0;
+        el('others-title').hidden = rest === 0;
+        el('note-none').hidden = !(total === 0 && notes.length > 0);
+    }
+
+    /* Grow a card to fit its content, but only up to NOTE_COLLAPSE_PX.
+       Past that it clamps and grows an Expand control instead — one
+       pasted file should not push every other note off the screen. */
     function sizeCard(card) {
         const n = findNote(card.dataset.id);
-        if (!n || card.classList.contains('note-row')) return;
-        const compact = noteView === 'compact';
-        const limit = compact ? CFG.NOTE_COMPACT_PX : CFG.NOTE_COLLAPSE_PX;
+        if (!n) return;
+        const limit = CFG.NOTE_COLLAPSE_PX;
         let clamped;
 
         if (isList(n)) {
@@ -793,9 +760,7 @@
             ta.style.height = 'auto';
             const full = ta.scrollHeight;
             clamped = full > limit;
-            /* An empty note still needs somewhere to click; the floor drops
-               in compact, where a card of blank space defeats the point. */
-            ta.style.height = `${clamped ? limit : Math.max(full, compact ? 52 : 96)}px`;
+            ta.style.height = `${clamped ? limit : Math.max(full, 96)}px`;
         }
 
         card.classList.toggle('is-clamped', clamped);
@@ -823,7 +788,7 @@
             card.querySelector('.note-stamp').textContent = relTime(note.updated);
             refreshDerived(note, card);
         }
-        commit();
+        durableNote(note);
     }
 
     function newNote(kind) {
@@ -838,13 +803,8 @@
 
         notes.unshift(note);
         renderNotes();
+        renderFolders();
         commit();
-
-        /* A list row has nothing to type into, so a note made there opens
-           in the focus view instead — otherwise "New note" would appear to
-           do nothing but add an empty line. */
-        if (noteView === 'list') { openFocus(note.id); return; }
-
         /* A brand new note is never pinned, so it is the first card in the
            unpinned grid — focus its title so you can just start typing. */
         const first = el('note-grid').querySelector('.note-title');
@@ -880,6 +840,22 @@
         touchNote(note, card);
     });
 
+    /* Leaving an edited card is the semantic boundary that folds its hot
+       file into the archive. Waiting one task distinguishes movement within
+       the same card from an actual note switch. */
+    el('panel-notes').addEventListener('focusout', (e) => {
+        const card = e.target.closest('.note');
+        if (!card) return;
+        const id = card.dataset.id;
+        setTimeout(() => {
+            const active = document.activeElement;
+            const stillEditing = card.contains(active) &&
+                active.matches('.note-title, .note-body, .check-text');
+            if (stillEditing) return;
+            if (Store.checkpoint(id)) renderNotes();
+        }, 0);
+    });
+
     el('panel-notes').addEventListener('click', (e) => {
         const card = e.target.closest('.note');
         if (!card) return;
@@ -892,18 +868,21 @@
             if (item) {
                 item.done = !item.done;
                 touchNote(note, card);
-                renderNotes();
+                row.classList.toggle('is-done', item.done);
+                row.querySelector('.check-box').setAttribute('aria-checked', String(item.done));
+                refreshChecklistProgress(note, card);
+                sizeCard(card);
             }
         } else if (e.target.closest('.check-del')) {
             const row = e.target.closest('.check-item');
             note.items = (note.items || []).filter((i) => i.id !== row.dataset.item);
             touchNote(note, card);
-            renderNotes();
+            refreshChecklistCard(note, card);
         } else if (e.target.closest('.check-add')) {
             addChecklistItem(note, card);
         } else if (e.target.closest('.note-folder')) {
             openFolderModal({ kind: 'note', id: note.id });
-        } else if (e.target.closest('.note-expand') || e.target.closest('.row-open')) {
+        } else if (e.target.closest('.note-expand')) {
             openFocus(note.id);
         } else if (e.target.closest('.act-pin')) {
             note.pinned = !note.pinned;
@@ -922,10 +901,24 @@
         note.items = note.items || [];
         note.items.push({ id: uid(), text: '', done: false });
         touchNote(note, card);
-        renderNotes();
-        const live = document.querySelector(`.note[data-id="${note.id}"]`);
-        const inputs = live ? live.querySelectorAll('.check-text') : [];
+        refreshChecklistCard(note, card);
+        const inputs = card.querySelectorAll('.check-text');
         if (inputs.length) inputs[inputs.length - 1].focus();
+    }
+
+    function refreshChecklistProgress(note, card) {
+        const progress = card.querySelector('.check-progress');
+        if (!progress) return;
+        const items = note.items || [];
+        progress.textContent = `${items.filter((item) => item.done).length} of ${items.length} done`;
+    }
+
+    /* Checklist edits replace only that card's body. Other cards—and any
+       caret they own—remain untouched. */
+    function refreshChecklistCard(note, card) {
+        card.querySelector('.note-bodywrap').innerHTML =
+            `${checklistMarkup(note)}<div class="note-fade" aria-hidden="true"></div>`;
+        sizeCard(card);
     }
 
     /* Enter at the end of a checklist row adds the next one, the way every
@@ -985,7 +978,7 @@
         const stale = trash.filter((t) => new Date(t.deletedAt || 0).getTime() < cutoff);
         if (!stale.length) return;
         stale.forEach(purgeForever);
-        cache();
+        commit();
     }
 
     function renderTrash() {
@@ -1076,9 +1069,11 @@
     }
 
     function closeFocus() {
+        const id = focusId;
         el('focus-modal').hidden = true;
         document.body.classList.remove('is-locked');
         focusId = null;
+        Store.checkpoint(id);
         renderNotes();
     }
 
@@ -1105,7 +1100,7 @@
             if (!isList(note)) note.body = el('focus-body').value;
             note.updated = new Date().toISOString();
             updateFocusMeta();
-            commit();
+            durableNote(note);
         });
     });
 
@@ -1118,7 +1113,7 @@
         const item = (note.items || []).find((i) => i.id === e.target.closest('.check-item').dataset.item);
         if (item) item.text = e.target.value;
         note.updated = new Date().toISOString();
-        commit();
+        durableNote(note);
     });
 
     el('focus-items').addEventListener('click', (e) => {
@@ -1139,7 +1134,7 @@
         note.updated = new Date().toISOString();
         renderFocusItems(note);
         updateFocusMeta();
-        commit();
+        durableNote(note);
         const inputs = el('focus-items').querySelectorAll('.check-text');
         if (e.target.closest('.check-add') && inputs.length) inputs[inputs.length - 1].focus();
     });
@@ -1150,10 +1145,21 @@
         const note = findNote(focusId);
         if (!note) return;
         note.items.push({ id: uid(), text: '', done: false });
+        note.updated = new Date().toISOString();
         renderFocusItems(note);
-        commit();
+        durableNote(note);
         const inputs = el('focus-items').querySelectorAll('.check-text');
         if (inputs.length) inputs[inputs.length - 1].focus();
+    });
+
+    el('focus-modal').addEventListener('focusout', () => {
+        const id = focusId;
+        setTimeout(() => {
+            const active = document.activeElement;
+            const stillEditing = active === el('focus-title') || active === el('focus-body') ||
+                el('focus-items').contains(active);
+            if (!stillEditing) Store.checkpoint(id);
+        }, 0);
     });
 
     el('focus-close').addEventListener('click', closeFocus);
@@ -1297,14 +1303,10 @@
     }
 
     function renderFiles() {
-        const shown = files.filter(inActiveFolder).filter(matchesFile)
-            .sort(FILE_SORTS[el('file-sort').value] || FILE_SORTS.added);
-
-        el('count-files').textContent = query() ? `${shown.length}` : `${files.length}`;
-        el('file-none').hidden = !(shown.length === 0 && files.length > 0);
+        const shown = files.slice().sort(FILE_SORTS[el('file-sort').value] || FILE_SORTS.added);
 
         el('file-list').innerHTML = shown.map((f) => `
-            <li class="file" data-id="${f.id}">
+            <li class="file" data-id="${esc(f.id)}">
                 <span class="file-icon" aria-hidden="true">
                     <svg class="ico"><use href="#i-file"></use></svg>
                 </span>
@@ -1336,12 +1338,25 @@
         el('file-note').textContent = files.length
             ? `${files.length} of ${CFG.MAX_FILES} files · ${formatBytes(totalBytes())} stored in your gist`
             : '';
+        applyFileFilters();
+    }
+
+    function applyFileFilters() {
+        let total = 0;
+        el('file-list').querySelectorAll('.file').forEach((row) => {
+            const file = files.find((item) => String(item.id) === row.dataset.id);
+            const shown = Boolean(file && inActiveFolder(file) && matchesFile(file));
+            row.classList.toggle('is-filtered', !shown);
+            if (shown) total++;
+        });
+        el('count-files').textContent = String(total);
+        el('file-none').hidden = !(total === 0 && files.length > 0);
     }
 
     el('file-list').addEventListener('click', async (e) => {
         const row = e.target.closest('.file');
         if (!row) return;
-        const meta = files.find((f) => f.id === row.dataset.id);
+        const meta = files.find((f) => String(f.id) === row.dataset.id);
         if (!meta) return;
 
         if (e.target.closest('.file-folder')) {
@@ -1475,8 +1490,10 @@
         el('history-list').innerHTML = '<li class="hint">Loading…</li>';
         el('history-modal').hidden = false;
 
-        /* history() is filled by the last load, so refresh it first —
-           otherwise this shows the list as it was when you unlocked. */
+        /* Finish the current editing session before loading the list, then
+           refresh history so it includes that semantic checkpoint. */
+        Store.checkpoint();
+        if (Store.hasPending()) await Store.flush();
         await pullFromGist();
         const revs = Store.history();
 
@@ -1614,12 +1631,21 @@
     el('settings-cancel').addEventListener('click', () => { el('settings-modal').hidden = true; });
 
     el('settings-save').addEventListener('click', async () => {
+        const wasConnected = Store.isConnected();
+        /* Finish against the old gist before disconnecting or switching it. */
+        if (wasConnected) {
+            Store.checkpoint();
+            if (Store.hasPending()) await Store.flush();
+        }
         Store.setCredentials(el('token-input').value, el('gist-input').value);
         el('settings-modal').hidden = true;
         reflectConnection();
 
         if (!Store.isConnected()) { toast('Cloud sync turned off'); return; }
         toast('Connecting…');
+        /* On an existing connection, never pull over pending local work.
+           A first connection must merge before pushing or it could replace
+           an established remote docket with the local cache. */
         await pullFromGist(true);
         /* Push the merged result straight back, so whatever this device
            had before connecting actually reaches the gist. */
@@ -1672,8 +1698,7 @@
         if (el('panel-notes').contains(document.activeElement)) return;
         document.querySelectorAll('.note').forEach((card) => {
             const note = findNote(card.dataset.id);
-            const stamp = card.querySelector('.note-stamp');
-            if (note && stamp) stamp.textContent = relTime(note.updated);
+            if (note) card.querySelector('.note-stamp').textContent = relTime(note.updated);
         });
     }, 60000);
 

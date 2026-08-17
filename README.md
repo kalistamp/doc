@@ -61,29 +61,6 @@ line's real shape sounds better than it reads: it puts half of every long
 line off-screen and leaves you working the scrollbar, which defeats the point
 of a view that exists to make a long note legible. Indentation survives.
 
-**Views.** The board has three shapes, picked from the switcher beside the
-sort control:
-
-| view | what it is | good for |
-| --- | --- | --- |
-| **Cards** | the masonry above, notes editable in place | writing, a board you scan |
-| **Compact** | the same cards, clamped at ~120px and tightened | seeing twice as many at once |
-| **List** | one two-line row per note — title, then stamp, size and folder | finding a note among many |
-
-A list row has no editor in it: tapping one opens the focus view, which on a
-phone is the full-screen sheet, and is the better place to write there
-anyway. Pin, delete and move-to-folder stay on the row. **New note** in list
-view opens the sheet directly, since there would otherwise be nothing to type
-into.
-
-The list is mostly a phone answer. At one column a single long note fills the
-screen and finding a particular one becomes a scroll; rows put twenty notes
-where one card was.
-
-The choice is per device, kept in `localStorage` and deliberately *not* in the
-gist — like the theme, it belongs to the screen you are looking at, and
-syncing it would have a phone and a desktop overwrite each other all day.
-
 **Files.** Drag and drop or browse. Each upload becomes its own file inside
 the gist, so it comes back down on any machine — download it, or copy a text
 file's contents straight to the clipboard.
@@ -97,7 +74,9 @@ selected lands in it.
 
 **Search** is one box for the whole docket. It filters notes and files at
 once — including inside checklist items — and the tab counts become match
-counts, so you can see which side the hits are on without switching.
+counts, so you can see which side the hits are on without switching. Search
+and folder filters toggle existing rows in place, preserving carets and
+avoiding a resize/reflow pass for every card on each keystroke.
 
 **Trash.** Deleting a note or file moves it to the trash and offers Undo on
 the spot. A Trash tab appears while anything is in it, with Restore and
@@ -110,9 +89,11 @@ space.
 backup, re-importable) or `.txt` (every note laid out for reading, not
 importable — it says so at the top). Import asks before replacing anything.
 
-**Version history.** GitHub stamps a revision on every save, so Settings →
-Version history lists them with their line deltas and restores any one. The
-restore is itself a save, so it lands in the same list and is undoable.
+**Version history.** Durable typing and navigable history are separate. The
+currently edited note autosaves on the short clock, while blur, note/tab
+switches, structural changes, unload, and ten quiet minutes create archive
+checkpoints. Settings → Version history thins the remaining gist clock noise
+into useful restore points. A restore is itself a checkpoint and is undoable.
 
 A folder is only a label — membership is one `folder` id on the item — so
 deleting a folder never deletes what was in it. Its contents fall back to
@@ -133,8 +114,9 @@ app.js       notes, files, focus view, tabs, modals, rendering
 ### Storage layout
 
 ```
-docket share.json     notes + file metadata + folders + trash   rewritten on every edit
-docket-blob-<id>      one file per upload                       written only when that file changes
+docket share.json     cold notes + file/folder/trash metadata   written at checkpoints
+docket-hot-<id>       the one note currently being edited       written on the save clock
+docket-blob-<id>      one file per upload                        written only when that file changes
 ```
 
 One gist file per upload, rather than one big JSON of them, because of how
@@ -165,24 +147,26 @@ longer open.
 
 Writes are debounced (~0.9 s) and queued so only one PATCH is ever in flight —
 two overlapping PATCHes to the same gist can land out of order and quietly
-undo each other. A failed write puts its dirty flag back so the next edit, or
-the Retry button, carries it up again.
+undo each other. While typing, that PATCH contains only the compact hot note,
+not the full docket. A failed write puts its dirty state back so the next edit,
+or the Retry button, carries it up again.
 
 The debounce has a 5 s ceiling. Without one it starves: typing steadily
 resets the timer on every keystroke, so the app looks like it is saving and
-never actually does.
+never actually does. On blur or note switch, the hot note folds into the cold
+archive and its temporary file is deleted. If a session is interrupted, load
+reconciles the hot note by its update time and folds it on startup.
 
 ---
 
 ## Two machines at once
 
-Sync is last-write-wins on the whole document. There is no merge: if you edit
-the same note on two machines without syncing in between, the second save
-wins outright.
+Sync reconciles notes by id and update time. Different notes can therefore be
+recovered independently from the archive and any crash-left hot file; edits to
+the same note remain last-write-wins.
 
-In practice this rarely bites, because saves land about a second after you
-stop typing. If you know another machine has been busy, click the status pill
-first — it pushes anything outstanding and then pulls.
+If you know another machine has been busy, click the status pill first — it
+checkpoints and pushes anything outstanding, then pulls.
 
 ---
 

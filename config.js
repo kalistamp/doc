@@ -13,8 +13,13 @@ window.DOCKET_CONFIG = {
        data is protected by the token you enter, not by this. */
     PASSKEY: "p",
 
-    /* Notes and file *metadata* — small, rewritten on every edit. */
+    /* The cold archive: notes plus file/folder/trash metadata. It is only
+       rewritten at semantic checkpoints, never on the typing clock. */
     DATA_FILE: "docket share.json",
+
+    /* The one note being edited is durable in its own compact file. A hot
+       file is folded into DATA_FILE on blur/switch and after a crash. */
+    HOT_PREFIX: "docket-hot-",
 
     /* Each upload becomes its own gist file, `docket-blob-<id>`. One
        file per blob rather than one big JSON of them, because:
@@ -42,14 +47,13 @@ window.DOCKET_CONFIG = {
        steady typing resets the debounce forever and nothing is saved. */
     MAX_SAVE_WAIT_MS: 5000,
 
+    /* A long-running editing session still gets a navigable checkpoint
+       after ten quiet minutes even if the note remains open. */
+    CHECKPOINT_IDLE_MS: 10 * 60 * 1000,
+
     /* A note taller than this collapses behind an expand control, so one
        pasted file cannot push everything else off the screen. */
     NOTE_COLLAPSE_PX: 260,
-
-    /* The same ceiling in the compact view. Low enough that a phone shows
-       several notes at once — which is the only reason that view exists —
-       and still tall enough to read a few lines and know what a note is. */
-    NOTE_COMPACT_PX: 118,
 
     /* Deleted items sit in the trash this long before being purged on the
        next load. Long enough to notice a mistake a week later. */

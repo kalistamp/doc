@@ -7,7 +7,8 @@
    still runs, notes still persist locally, nothing is uploaded.
 
    Layout inside the gist:
-     docket share.json     notes + file metadata (rewritten on edits)
+     docket share.json     cold archive, rewritten at checkpoints
+     docket-hot-<id>       the one note currently being edited
      docket-blob-<id>      one file per upload, base64
 
    Blobs are NOT downloaded on load. The gist listing gives us each
@@ -31,9 +32,14 @@
     let listeners = [];
 
     /* Dirty flags + the getters that produce a payload when we flush. */
-    const dirty = { data: false };
+    const dirty = { archive: false, hot: false };
     let pendingBlobs = {};      /* gist filename -> base64 or null (delete) */
+    let pendingHotDeletes = {}; /* hot filename -> null */
     let sources = { data: null };
+
+    let activeHotId = null;
+    let loadedHotNames = [];
+    let checkpointTimer = null;
 
     let flushTimer = null;
     let inFlight = null;
@@ -124,6 +130,42 @@
         };
     }
 
+    async function entryText(entry) {
+        if (!entry) return '';
+        if (entry.truncated && entry.raw_url) {
+            const res = await fetch(entry.raw_url, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`Could not read gist data (${res.status}).`);
+            return res.text();
+        }
+        return entry.content || '';
+    }
+
+    const noteTime = (note) => {
+        const time = new Date(note && (note.updated || note.created) || 0).getTime();
+        return Number.isFinite(time) ? time : 0;
+    };
+
+    /* The archive intentionally contains the last checkpointed copy of the
+       hot note. On load, the newer per-note copy wins. A missing archive
+       copy means a crash happened before the note's first fold, so the hot
+       copy is recovered rather than discarded. */
+    function overlayHot(data, records) {
+        const byId = new Map(data.notes.map((note, index) => [String(note.id), index]));
+        records.sort((a, b) => noteTime(a.note) - noteTime(b.note));
+        records.forEach(({ note }) => {
+            if (!note || note.id == null) return;
+            const id = String(note.id);
+            const index = byId.get(id);
+            if (index == null) {
+                byId.set(id, data.notes.length);
+                data.notes.push(note);
+            } else if (noteTime(note) >= noteTime(data.notes[index])) {
+                data.notes[index] = note;
+            }
+        });
+        return data;
+    }
+
     async function load() {
         if (!isConnected()) { emit('offline'); return null; }
 
@@ -158,18 +200,29 @@
         const entry = files[CFG.DATA_FILE];
         if (entry) {
             try {
-                const text = entry.truncated && entry.raw_url
-                    ? await (await fetch(entry.raw_url, { cache: 'no-store' })).text()
-                    : entry.content;
+                const text = await entryText(entry);
                 data = JSON.parse(text || '{}') || {};
             } catch (e) { data = {}; }
         }
+
+        data = normalise(data);
+        const hotNames = Object.keys(files).filter((name) => name.startsWith(CFG.HOT_PREFIX));
+        const hotRecords = [];
+        await Promise.all(hotNames.map(async (name) => {
+            try {
+                const parsed = JSON.parse(await entryText(files[name]) || '{}');
+                const note = parsed && parsed.note ? parsed.note : parsed;
+                if (note && note.id != null) hotRecords.push({ note });
+            } catch (e) { /* a partial hot file cannot override the archive */ }
+        }));
+        loadedHotNames = hotNames;
+        overlayHot(data, hotRecords);
 
         lastError = null;
         emit('synced');
         lastHistory = Array.isArray(json.history) ? json.history : [];
 
-        return normalise(data);
+        return data;
     }
 
     /* ---------- blobs -------------------------------------------------- */
@@ -202,7 +255,7 @@
         const name = blobName(id);
         pendingBlobs[name] = base64;
         blobCache[name] = base64;
-        touch();
+        schedule();
     }
 
     function dropBlob(id) {
@@ -210,7 +263,7 @@
         pendingBlobs[name] = null;     /* null tells GitHub to delete it */
         delete blobCache[name];
         delete blobRefs[name];
-        touch();
+        schedule();
     }
 
     /* ---------- save ---------------------------------------------------- */
@@ -220,11 +273,19 @@
      *  uploads the latest state instead of a stale one. */
     function bind(dataSource) { sources.data = dataSource; }
 
+    const hotName = (id) => `${CFG.HOT_PREFIX}${encodeURIComponent(String(id))}`;
+
+    function sourceNote(id) {
+        const data = sources.data ? sources.data() : null;
+        return data && Array.isArray(data.notes)
+            ? data.notes.find((note) => String(note.id) === String(id))
+            : null;
+    }
+
     /* Plain debouncing starves: someone typing steadily resets the timer
        on every keystroke and nothing ever reaches the gist. The ceiling
        keeps the wait bounded. */
-    function touch(which) {
-        if (which !== 'blobsOnly') dirty.data = true;
+    function schedule() {
         if (!isConnected()) { emit('offline'); return; }
 
         emit('dirty');
@@ -234,26 +295,93 @@
         flushTimer = setTimeout(flush, CFG.SAVE_DEBOUNCE_MS);
     }
 
-    const touchData = () => touch();
+    function queueHotDelete(id) {
+        if (id != null) pendingHotDeletes[hotName(id)] = null;
+    }
+
+    /* Structural changes are checkpoints. If a note is hot, its current
+       in-memory copy is already in the archive payload, so the hot file is
+       deleted in that same PATCH. */
+    function touchData() {
+        clearTimeout(checkpointTimer);
+        if (activeHotId != null) queueHotDelete(activeHotId);
+        activeHotId = null;
+        dirty.hot = false;
+        dirty.archive = true;
+        schedule();
+    }
+
+    /* Typing only dirties the compact hot file. Switching notes first folds
+       the previous one, giving the archive one revision per edit session. */
+    function touchNote(id) {
+        if (id == null) return;
+        id = String(id);
+        if (activeHotId != null && activeHotId !== id) {
+            queueHotDelete(activeHotId);
+            dirty.archive = true;
+        }
+        activeHotId = id;
+        dirty.hot = true;
+        clearTimeout(checkpointTimer);
+        checkpointTimer = setTimeout(() => checkpoint(id), CFG.CHECKPOINT_IDLE_MS);
+        schedule();
+    }
+
+    function checkpoint(id) {
+        if (activeHotId == null || (id != null && String(id) !== activeHotId)) return false;
+        clearTimeout(checkpointTimer);
+        queueHotDelete(activeHotId);
+        activeHotId = null;
+        dirty.hot = false;
+        dirty.archive = true;
+        schedule();
+        return true;
+    }
+
+    /* load() cannot fold immediately: its caller must first install the
+       reconciled notes into the bound data source. */
+    function foldLoadedHot() {
+        if (!loadedHotNames.length) return false;
+        loadedHotNames.forEach((name) => { pendingHotDeletes[name] = null; });
+        loadedHotNames = [];
+        dirty.archive = true;
+        schedule();
+        return true;
+    }
 
     const hasPending = () =>
-        dirty.data || Object.keys(pendingBlobs).length > 0 || !!inFlight;
+        dirty.archive || dirty.hot || Object.keys(pendingHotDeletes).length > 0 ||
+        Object.keys(pendingBlobs).length > 0 || !!inFlight;
 
-    async function flush() {
+    async function flush(options) {
         clearTimeout(flushTimer);
         if (!isConnected()) return;
-        if (!dirty.data && !Object.keys(pendingBlobs).length) return;
-        if (inFlight) { await inFlight.catch(() => {}); return flush(); }
+        if (!dirty.archive && !dirty.hot && !Object.keys(pendingHotDeletes).length &&
+                !Object.keys(pendingBlobs).length) return;
+        if (inFlight) { await inFlight.catch(() => {}); return flush(options); }
 
-        const sendData = dirty.data;
+        const sendArchive = dirty.archive;
+        const sendHotId = dirty.hot ? activeHotId : null;
+        const sendHotNote = sendHotId != null ? sourceNote(sendHotId) : null;
+        const sendHotDeletes = pendingHotDeletes;
         const sendBlobs = pendingBlobs;
-        dirty.data = false;
+        dirty.archive = false;
+        dirty.hot = false;
+        pendingHotDeletes = {};
         pendingBlobs = {};
         dirtySince = 0;
 
         const payload = {};
-        if (sendData) {
+        if (sendArchive && sources.data) {
             payload[CFG.DATA_FILE] = { content: JSON.stringify(sources.data(), null, 2) };
+        }
+        Object.keys(sendHotDeletes).forEach((name) => { payload[name] = null; });
+        if (sendHotNote) {
+            payload[hotName(sendHotId)] = { content: JSON.stringify({
+                version: 1, savedAt: new Date().toISOString(), note: sendHotNote
+            }) };
+        } else if (sendHotId != null) {
+            payload[hotName(sendHotId)] = null;
         }
         Object.keys(sendBlobs).forEach((name) => {
             /* null content is how the gist API deletes a file. */
@@ -264,15 +392,20 @@
         inFlight = (async () => {
             const res = await fetch(api(), {
                 method: 'PATCH', headers: headers(),
-                body: JSON.stringify({ files: payload })
+                body: JSON.stringify({ files: payload }),
+                keepalive: Boolean(options && options.keepalive)
             });
             if (!res.ok) {
                 /* Put the work back — the change is still unsaved, and the
                    next edit or Retry should carry it up again. */
-                dirty.data = dirty.data || sendData;
+                dirty.archive = dirty.archive || sendArchive;
+                if (sendHotId != null && activeHotId === sendHotId) dirty.hot = true;
+                pendingHotDeletes = Object.assign({}, sendHotDeletes, pendingHotDeletes);
                 pendingBlobs = Object.assign({}, sendBlobs, pendingBlobs);
                 throw new Error(describe(res, await readBody(res), 'write'));
             }
+            const json = await readBody(res);
+            if (json && Array.isArray(json.history)) lastHistory = json.history;
             /* Written blobs are now readable straight from the gist. */
             Object.keys(sendBlobs).forEach((name) => {
                 if (sendBlobs[name] !== null) blobRefs[name] = { content: sendBlobs[name] };
@@ -289,7 +422,7 @@
         } finally {
             inFlight = null;
         }
-        if (hasPending() && !lastError) flush();
+        if (hasPending() && !lastError) flush(options);
     }
 
     /* ---------- version history ---------------------------------------- */
@@ -297,7 +430,33 @@
     /* GitHub stamps a revision on every PATCH, so this is history we get
        without storing anything ourselves. Each entry carries a sha, a
        timestamp and the line delta of that save. */
-    const history = () => lastHistory.slice(0, CFG.HISTORY_LIMIT).map((h) => ({
+    /* Hot-file durability still creates gist commits. Thin clock-noise into
+       progressively wider time buckets, Time-Machine style: ten-minute
+       points for the last hour, hourly for a day, daily for a month, then
+       weekly. Checkpoint revisions remain useful without forty entries
+       being consumed by a few minutes of typing. */
+    function thinnedHistory() {
+        const rows = lastHistory.slice().sort((a, b) =>
+            new Date(b.committed_at || 0) - new Date(a.committed_at || 0));
+        if (!rows.length) return [];
+        const newest = new Date(rows[0].committed_at || Date.now()).getTime();
+        const seen = new Set();
+        return rows.filter((row, index) => {
+            const at = new Date(row.committed_at || 0).getTime();
+            const age = Math.max(0, newest - at);
+            const width = age < 3600000 ? 600000
+                : age < 86400000 ? 3600000
+                : age < 30 * 86400000 ? 86400000
+                : 7 * 86400000;
+            const key = `${width}:${Math.floor(at / width)}`;
+            if (index === 0) { seen.add(key); return true; }
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    const history = () => thinnedHistory().slice(0, CFG.HISTORY_LIMIT).map((h) => ({
         sha: h.version,
         at: h.committed_at,
         added: h.change_status && h.change_status.additions,
@@ -319,7 +478,7 @@
     }
 
     window.DocketStore = {
-        load, bind, touchData, flush,
+        load, bind, touchData, touchNote, checkpoint, foldLoadedHot, flush,
         history, atVersion,
         getBlob, putBlob, dropBlob,
         retry: () => { lastError = null; flush(); },
