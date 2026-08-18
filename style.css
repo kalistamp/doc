@@ -668,8 +668,9 @@ a { color: var(--accent); }
    takes only the height it needs and nothing is left hanging. The cost
    is reading order: it runs down column one, then column two, rather
    than left to right. For a board you scan rather than read in
-   sequence that is the right trade — and pinned notes are lifted into
-   their own band above, so the ordering that actually matters is kept.
+   sequence that is the right trade — and the notes you have flagged are
+   lifted into their own bands above, so the ordering that actually
+   matters is kept.
 
    (`grid-template-rows: masonry` would do this natively and keep row
    order, but it is still not shipping unflagged anywhere.) */
@@ -938,12 +939,16 @@ a { color: var(--accent); }
     transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .note-act:hover { background: var(--bg-tint); color: var(--ink); }
+/* Finish Next and the pin are independent, so both controls can be lit at
+   once on the same note. One rule serves both: they are told apart by
+   their icons, and a second accent colour would read as a second kind of
+   state rather than as the same one on a different switch. */
 .note-act.is-on { color: var(--accent); }
 .note-act.act-del:hover { background: var(--danger-wash); color: var(--danger); }
 .note-act.is-working { color: var(--accent); pointer-events: none; }
 .note-act.is-working .ico { animation: spin 1s linear infinite; }
 
-/* ---- band titles (Pinned / Everything else) ---------------------- */
+/* ---- band titles (Finish Next / Pinned / Everything else) -------- */
 
 .band-title {
     display: flex; align-items: center; gap: .45em;
@@ -955,6 +960,12 @@ a { color: var(--accent); }
 }
 .band-title .ico { width: .95em; height: .95em; color: var(--accent); }
 #others-title { margin-top: 1.6rem; }
+
+/* Pinned is the second band, and only needs the gap above it when the
+   first one is actually drawn. Asking the sibling directly keeps that in
+   CSS: both wraps are hidden by the same filter pass that fills them, and
+   a margin toggled from JS would be a third thing to keep in step. */
+#finish-wrap:not([hidden]) + #pinned-wrap > .band-title { margin-top: 1.6rem; }
 
 /* ---- checklists --------------------------------------------------- */
 

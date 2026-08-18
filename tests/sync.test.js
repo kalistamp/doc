@@ -95,6 +95,14 @@ function browser(name, server) {
             self.state = await self.Store.load();
             self.Store.bind(() => self.state, (merged) => { self.state = merged; });
             return self.state;
+        },
+        /** The background refresh: what app.js's pullFromGist does. It
+         *  merges the gist into what is already here rather than replacing
+         *  it, so an unpushed local change is not binned by a poll. */
+        async pull() {
+            const data = await self.Store.load();
+            if (data) self.state = self.Store.merge(data, self.state);
+            return self.state;
         }
     };
     return self;
@@ -250,6 +258,256 @@ test('a change that deliberately does not bump `updated` survives the merge', ()
     const local = docket([{ id: 'n', body: 'same', updated: iso(0), pinned: true }]);
 
     assert.equal(only.Store.merge(remote, local).notes[0].pinned, true);
+});
+
+/* ---- the pin travels both ways --------------------------------------- */
+
+/* The tie above is directional: it keeps a pin made HERE, and by exactly
+   the same rule it discards one made anywhere else. `pinnedAt` is what
+   settles the pin on its own merit instead. */
+
+test('a pin made on the phone reaches the browser that did not make it', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'text', updated: iso(0), pinned: false, pinnedAt: null }
+    ]));
+    server.state.log = [];
+
+    const phone = browser('phone', server);
+    const web = browser('web', server);
+    await phone.open();
+    await web.open();
+
+    /* Pinning on the phone: `pinned` flips and `updated` deliberately does
+       not, so the note is otherwise identical to the copy web holds. */
+    const note = phone.state.notes.find((n) => n.id === 'n');
+    note.pinned = true;
+    note.pinnedAt = iso(5);
+    phone.Store.touchData();
+    await phone.Store.flush();
+
+    assert.equal(
+        JSON.parse(server.state.files['docket share.json'].content).notes[0].pinned,
+        true, 'the pin reaches the gist');
+
+    await web.pull();
+    assert.equal(web.state.notes.find((n) => n.id === 'n').pinned, true,
+        'and lands on the other device');
+    assert.equal(web.state.notes.find((n) => n.id === 'n').pinnedAt, iso(5),
+        'carrying the stamp that ordered it');
+});
+
+test('the browser that did not make the pin does not write it back off', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'text', updated: iso(0), pinned: false, pinnedAt: null }
+    ]));
+    server.state.log = [];
+
+    const phone = browser('phone', server);
+    const web = browser('web', server);
+    await phone.open();
+    await web.open();
+
+    const note = phone.state.notes.find((n) => n.id === 'n');
+    note.pinned = true;
+    note.pinnedAt = iso(5);
+    phone.Store.touchData();
+    await phone.Store.flush();
+
+    /* Web has never seen the pin and now checkpoints something else. The
+       guard read in front of that write is the last chance to notice. */
+    web.state.notes.push({ id: 'other', body: 'new', updated: iso(6) });
+    web.Store.touchData();
+    await web.Store.flush();
+
+    const stored = JSON.parse(server.state.files['docket share.json'].content);
+    assert.equal(stored.notes.find((n) => n.id === 'n').pinned, true,
+        'a browser that never saw the pin must not erase it from the gist');
+});
+
+test('an unpin travels too, and outranks the pin it undoes', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'text', updated: iso(0), pinned: true, pinnedAt: iso(5) }
+    ]));
+
+    const phone = browser('phone', server);
+    const web = browser('web', server);
+    await phone.open();
+    await web.open();
+
+    /* Unpinning has to be datable, or it is the one change that can never
+       out-argue the pin sitting on the other machine. */
+    const note = web.state.notes.find((n) => n.id === 'n');
+    note.pinned = false;
+    note.pinnedAt = iso(9);
+    web.Store.touchData();
+    await web.Store.flush();
+
+    await phone.pull();
+    assert.equal(phone.state.notes.find((n) => n.id === 'n').pinned, false,
+        'the later unpin wins');
+});
+
+test('a pin survives an edit made to the same note on the other machine', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* The pin loses the note itself here — the remote body is newer — but
+       the two changes do not conflict and both should land. */
+    const remote = docket([{ id: 'n', body: 'rewritten', updated: iso(9),
+                            pinned: false, pinnedAt: null }]);
+    const local = docket([{ id: 'n', body: 'old', updated: iso(0),
+                           pinned: true, pinnedAt: iso(5) }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.body, 'rewritten', 'the later edit still wins the note');
+    assert.equal(merged.pinned, true, 'and the pin rides along');
+});
+
+/* ---- Finish Next travels on its own clock too -------------------------
+
+   The second band flag is reconciled exactly the way the pin is, and for
+   the same reason: it deliberately does not bump `updated`, so it has to
+   carry `finishNextAt` or it loses every tie to the browser doing the
+   reconciling. What is worth testing beyond the pin's own cases is that
+   the two axes stay independent — one flag settling must not carry the
+   other's answer with it. */
+
+test('a Finish Next made on the phone reaches the browser that did not make it', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'text', updated: iso(0), finishNext: false, finishNextAt: null }
+    ]));
+
+    const phone = browser('phone', server);
+    const web = browser('web', server);
+    await phone.open();
+    await web.open();
+
+    const note = phone.state.notes.find((n) => n.id === 'n');
+    note.finishNext = true;
+    note.finishNextAt = iso(5);
+    phone.Store.touchData();
+    await phone.Store.flush();
+
+    await web.pull();
+    assert.equal(web.state.notes.find((n) => n.id === 'n').finishNext, true,
+        'the mark lands on the other device');
+    assert.equal(web.state.notes.find((n) => n.id === 'n').finishNextAt, iso(5),
+        'carrying the stamp that ordered the band');
+});
+
+test('clearing Finish Next travels too, and outranks the mark it undoes', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'text', updated: iso(0), finishNext: true, finishNextAt: iso(5) }
+    ]));
+
+    const phone = browser('phone', server);
+    const web = browser('web', server);
+    await phone.open();
+    await web.open();
+
+    const note = web.state.notes.find((n) => n.id === 'n');
+    note.finishNext = false;
+    note.finishNextAt = iso(9);
+    web.Store.touchData();
+    await web.Store.flush();
+
+    await phone.pull();
+    assert.equal(phone.state.notes.find((n) => n.id === 'n').finishNext, false,
+        'the later clear wins');
+});
+
+test('a pin and a Finish Next made on different machines both land', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* The one case a single shared clock would get wrong: two flags moved
+       on two machines, neither change touching `updated`, so the note
+       itself is a tie either way. Settled on one axis, the note comes back
+       wearing one answer and the other machine's is quietly dropped. */
+    const remote = docket([{ id: 'n', body: 'same', updated: iso(0),
+                            pinned: false, pinnedAt: null,
+                            finishNext: true, finishNextAt: iso(5) }]);
+    const local = docket([{ id: 'n', body: 'same', updated: iso(0),
+                           pinned: true, pinnedAt: iso(3),
+                           finishNext: false, finishNextAt: null }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.pinned, true, 'the pin made here survives');
+    assert.equal(merged.finishNext, true, 'and the mark made there arrives');
+});
+
+test('a Finish Next survives an edit made to the same note on the other machine', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    const remote = docket([{ id: 'n', body: 'rewritten', updated: iso(9),
+                             finishNext: false, finishNextAt: null }]);
+    const local = docket([{ id: 'n', body: 'old', updated: iso(0),
+                            finishNext: true, finishNextAt: iso(5) }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.body, 'rewritten', 'the later edit still wins the note');
+    assert.equal(merged.finishNext, true, 'and the mark rides along');
+});
+
+test('a docket written before Finish Next existed merges as it always did', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* Neither side has the field at all. Nothing may be invented for it,
+       and the pin beside it must still settle normally. */
+    const remote = docket([{ id: 'n', body: 'same', updated: iso(0), pinned: false }]);
+    const local = docket([{ id: 'n', body: 'same', updated: iso(0), pinned: true }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.pinned, true);
+    assert.equal(merged.finishNext, undefined, 'no flag is conjured onto an old note');
+});
+
+test('a stale hot file does not strip a Finish Next the archive has since gained', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'typed', updated: iso(5), finishNext: true, finishNextAt: iso(7) }
+    ]));
+    /* Left behind by a browser typing before the mark was made: the newer
+       note, the older flag. Overlaying it wholesale clears the mark before
+       the merge downstream ever sees it. */
+    server.state.files['docket-hot-n'] = {
+        content: JSON.stringify({
+            version: 1, client: 'phone', savedAt: iso(6),
+            note: { id: 'n', body: 'typed some more', updated: iso(8),
+                    finishNext: false, finishNextAt: null }
+        })
+    };
+
+    const web = browser('web', server);
+    await web.open();
+
+    const note = web.state.notes.find((n) => n.id === 'n');
+    assert.equal(note.body, 'typed some more', 'the live draft still wins the text');
+    assert.equal(note.finishNext, true, 'without taking the mark off with it');
+});
+
+test('a stale hot file does not strip a pin the archive has since gained', async () => {
+    const server = gistServer(docket([
+        { id: 'n', body: 'typed', updated: iso(5), pinned: true, pinnedAt: iso(7) }
+    ]));
+    /* Left behind by a browser that was typing before the pin existed: the
+       newer note, the older pin. Overlaying it wholesale unpins the note
+       before the merge downstream ever sees it. */
+    server.state.files['docket-hot-n'] = {
+        content: JSON.stringify({
+            version: 1, client: 'phone', savedAt: iso(6),
+            note: { id: 'n', body: 'typed some more', updated: iso(8),
+                    pinned: false, pinnedAt: null }
+        })
+    };
+
+    const web = browser('web', server);
+    await web.open();
+
+    const note = web.state.notes.find((n) => n.id === 'n');
+    assert.equal(note.body, 'typed some more', 'the live draft still wins the text');
+    assert.equal(note.pinned, true, 'without taking the pin off with it');
 });
 
 test('a failed write arms its own retry instead of parking on Failed', async () => {

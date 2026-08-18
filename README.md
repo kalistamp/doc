@@ -62,6 +62,24 @@ pin first, as many as you like. Pinning deliberately does *not* touch the
 updated stamp: it is not an edit, and a note you merely pinned should not
 jump to the front of a recently-updated sort.
 
+It carries its own date instead, `pinnedAt`, written whichever way the pin
+is turned. That is what orders the band, and — because `updated` is what
+every merge compares — it is also the only reason a pin made on your phone
+is a pin on your laptop. See *Two machines at once*.
+
+**Finish Next.** A second band, above Pinned, on the bomb button beside the
+pin. Pinning is for what you want kept in reach; Finish Next is for what you
+mean to get done, and the two answer different questions often enough to be
+worth separate bands. It works the same way in every respect — its own band,
+newest mark first, its own date in `finishNextAt`, and the same deliberate
+refusal to touch the updated stamp.
+
+The two flags are independent: marking a note leaves its pin exactly as it
+was, and unpinning one leaves its mark. A note wearing both is *drawn* once,
+in the higher band, with both controls lit — a note drawn twice would be two
+cards answering to one id, and every lookup on the board reads the first it
+finds and leaves the other stale.
+
 The board is laid out as masonry rather than a grid. A grid puts cards in
 rows and makes every row as tall as its tallest card, so a two-line note
 beside a sixty-line one leaves a dead band of whitespace beneath it.
@@ -94,12 +112,17 @@ counts, so you can see which side the hits are on without switching. Search
 and folder filters toggle existing rows in place, preserving carets and
 avoiding a resize/reflow pass for every card on each keystroke.
 
-**Trash.** Deleting a note or file moves it to the trash and offers Undo on
-the spot. A Trash tab appears while anything is in it, with Restore and
-Delete forever; everything is purged automatically after 30 days. A trashed
-file keeps its blob in the gist until then — there would be nothing to
-restore otherwise, and emptying the trash is what actually reclaims the
-space.
+**Trash.** Deleting a note asks first — the delete control sits beside the
+pin on every card, and an Undo you have eight seconds to notice is a poor
+answer to a mis-click found later. Deleting a file still offers Undo on the
+spot: dropping one in is a single motion with nothing to re-read, and a
+dialog per file is friction where the toast is not.
+
+Either way it goes to the trash, not away. A Trash tab appears while
+anything is in it, with Restore and Delete forever; everything is purged
+automatically after 30 days. A trashed file keeps its blob in the gist until
+then — there would be nothing to restore otherwise, and emptying the trash
+is what actually reclaims the space.
 
 **Backup.** Settings → Backup exports the whole docket as `.json` (a complete
 backup, re-importable) or `.txt` (every note laid out for reading, not
@@ -212,9 +235,33 @@ merged with a machine that still has the item in its list. An item edited
 after it was binned wins and takes its tombstone with it; emptying the trash
 leaves the id, the date and a flag behind, because dropping the record
 outright is how a purged note walks back in from the other browser. A tie
-goes to the browser doing the reconciling, which is what carries a change
-that deliberately does not bump `updated` — pinning, above all — across the
-merge instead of losing it to an identically dated remote copy.
+goes to the browser doing the reconciling.
+
+**A band flag is reconciled on its own clock.** Everything above compares
+`updated`, and neither pinning a note nor marking it to finish next bumps
+it, so both are invisible to that comparison: two copies of a note differing only in their pin are a
+tie, and the tie always keeps whatever the reconciling browser already had.
+Read in one direction that looks like the feature — a pin made *here*
+survives. Read in the other it is the bug it also was: a pin made on the
+phone arrived looking exactly like a note the browser already had, so it was
+dropped, and then written back to the gist as an unpin on the browser's next
+checkpoint. The pin therefore carries `pinnedAt`, and the later pin change
+wins the pin whichever copy of the note wins the note — so an edit on one
+machine and a pin on the other both land. The stamp is written when the pin
+comes off as well as when it goes on; an unpin that cleared the field was
+the one change that could never out-argue the pin it undid.
+
+`finishNext` carries `finishNextAt` and is reconciled the same way, on an
+axis of its own rather than sharing the pin's. Sharing one would fail on the
+case the separation exists for: pin a note here, mark it to finish next on
+your phone, and neither change bumped `updated`, so the note itself is a tie
+whichever way you look at it. A single clock settles that once and drops the
+other machine's change. Two clocks land both.
+
+The same overlay guards the hot file. A note being typed on one machine is
+a snapshot that knows nothing of a pin another machine has put on it since,
+and folding it in wholesale would strip the pin before the merge ever saw
+it.
 
 **A hot file belongs to the browser writing it.** Each one is stamped with a
 client handle, and a browser folds only its own or one left abandoned for two

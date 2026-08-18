@@ -2,8 +2,8 @@
    DOCKET SHARING — app
 
    State is four collections, all of them in the gist:
-     notes    [{ id, kind, title, body|items, pinned, pinnedAt, folder,
-                 created, updated }]
+     notes    [{ id, kind, title, body|items, pinned, pinnedAt,
+                 finishNext, finishNextAt, folder, created, updated }]
      files    [{ id, name, size, type, folder, added }]   ← metadata only
      folders  [{ id, name, created }]
      trash    [{ kind, item, deletedAt }]
@@ -11,6 +11,20 @@
    A note is either kind 'note' (a `body` string) or kind 'checklist'
    (an `items` array). Anything without a kind is a plain note, which is
    what every note written before checklists existed looks like.
+
+   `pinned` and `finishNext` are two independent bands above the board:
+   Finish Next is what you mean to get done, Pinned is what you want
+   kept in reach. Neither implies the other, and a note wearing both is
+   drawn once, in the higher band — one card per note is what every
+   `data-id` lookup on the board assumes.
+
+   Both are stamped, `pinnedAt` and `finishNextAt`, dating the last
+   change to the flag in either direction. They are the two changes that
+   deliberately do not bump `updated` — neither is an edit, and a note
+   you merely flagged should not jump up a recently-updated sort. But
+   `updated` is what every merge compares, so without a clock of its own
+   a flag is invisible to the other device's reconcile. The stamps are
+   also what order each band.
 
    A folder is only a label: `folder` holds its id, so deleting a folder
    never deletes what was in it.
@@ -246,13 +260,14 @@
        caret, a text selection and a scroll position. Bodies are left out:
        every edit to one bumps `updated`, and hashing a thousand-line note
        on a timer to learn what its timestamp already says is waste.
-       `pinned` is in, because pinning deliberately does not bump it. */
+       `pinned` and `finishNext` are in, because neither deliberately
+       bumps it. */
     const fingerprint = () => [notes, files, folders, trash].map((list) =>
         (list || []).map((row) => {
             const item = row.item || row;
             return [item.id, item.updated || item.added || item.created || '',
                     row.deletedAt || '', row.purged ? 1 : 0,
-                    item.pinned ? 1 : 0].join('~');
+                    item.pinned ? 1 : 0, item.finishNext ? 1 : 0].join('~');
         }).join(',')).join('|');
 
     /**
@@ -714,16 +729,25 @@
 
     const findNote = (id) => notes.find((n) => String(n.id) === String(id));
 
-    /* Pinned notes are pulled into their own band above the rest, sorted
-       by when you pinned them. In a masonry flow they would otherwise be
-       scattered down the first column, which is the opposite of what
-       pinning is for. */
+    /* Flagged notes are pulled into their own bands above the rest, each
+       sorted by when you flagged them. In a masonry flow they would
+       otherwise be scattered down the first column, which is the opposite
+       of what flagging them is for.
+
+       The two flags are independent, but the bands cannot be: a note drawn
+       twice would be two cards answering to one `data-id`, and every
+       lookup on the board — the filter pass, the minute tick, sizeCard —
+       reads the first it finds and silently leaves the other stale. So a
+       note wearing both is drawn once, in the higher band, and keeps both
+       flags in the data and both controls lit in its footer. */
     function splitNotes() {
         const cmp = NOTE_SORTS[el('note-sort').value] || NOTE_SORTS.updated;
-        const pinned = notes.filter((n) => n.pinned)
-            .sort((a, b) => new Date(b.pinnedAt || b.updated || 0) - new Date(a.pinnedAt || a.updated || 0));
-        const rest = notes.filter((n) => !n.pinned).sort(cmp);
-        return { pinned, rest };
+        const byStamp = (key) => (a, b) =>
+            new Date(b[key] || b.updated || 0) - new Date(a[key] || a.updated || 0);
+        const finish = notes.filter((n) => n.finishNext).sort(byStamp('finishNextAt'));
+        const pinned = notes.filter((n) => n.pinned && !n.finishNext).sort(byStamp('pinnedAt'));
+        const rest = notes.filter((n) => !n.pinned && !n.finishNext).sort(cmp);
+        return { finish, pinned, rest };
     }
 
     function noteCard(n) {
@@ -755,8 +779,15 @@
                         ${n.folder ? `<span>${esc(folderName(n.folder))}</span>` : ''}
                     </button>
                     <span class="note-stamp">${esc(relTime(n.updated))}</span>
+                    <button class="note-act act-finish${n.finishNext ? ' is-on' : ''}" type="button"
+                            title="${n.finishNext ? 'Remove from Finish Next' : 'Finish next'}"
+                            aria-pressed="${n.finishNext ? 'true' : 'false'}"
+                            aria-label="${n.finishNext ? 'Remove note from Finish Next' : 'Mark note to finish next'}">
+                        <svg class="ico"><use href="#i-bomb"></use></svg>
+                    </button>
                     <button class="note-act act-pin${n.pinned ? ' is-on' : ''}" type="button"
                             title="${n.pinned ? 'Unpin' : 'Pin to top'}"
+                            aria-pressed="${n.pinned ? 'true' : 'false'}"
                             aria-label="${n.pinned ? 'Unpin note' : 'Pin note'}">
                         <svg class="ico"><use href="#i-pin"></use></svg>
                     </button>
@@ -795,9 +826,10 @@
     }
 
     function renderNotes() {
-        const { pinned, rest } = splitNotes();
+        const { finish, pinned, rest } = splitNotes();
 
         el('notes-empty').hidden = notes.length !== 0;
+        el('finish-grid').innerHTML = finish.map(noteCard).join('');
         el('pinned-grid').innerHTML = pinned.map(noteCard).join('');
         el('note-grid').innerHTML = rest.map(noteCard).join('');
 
@@ -819,19 +851,27 @@
        same DOM nodes, preserving carets and avoiding sizeCard/layout reads
        on the app's highest-frequency path. */
     function applyNoteFilters() {
-        let total = 0, pinned = 0, rest = 0;
+        let total = 0, finish = 0, pinned = 0, rest = 0;
         document.querySelectorAll('.note').forEach((card) => {
             const note = findNote(card.dataset.id);
             const shown = Boolean(note && inActiveFolder(note) && matchesNote(note));
             card.classList.toggle('is-filtered', !shown);
             if (shown) {
                 total++;
-                if (note.pinned) pinned++; else rest++;
+                /* Which band this card is actually in, not which flags it
+                   wears: a note in both bands is drawn in the higher one,
+                   and counting it twice would leave the lower band titled
+                   over nothing. */
+                if (note.finishNext) finish++;
+                else if (note.pinned) pinned++;
+                else rest++;
             }
         });
         el('count-notes').textContent = String(total);
+        el('finish-wrap').hidden = finish === 0;
         el('pinned-wrap').hidden = pinned === 0;
-        el('others-title').hidden = rest === 0;
+        /* "Everything else" only means anything with a band above it. */
+        el('others-title').hidden = rest === 0 || (finish === 0 && pinned === 0);
         el('note-none').hidden = !(total === 0 && notes.length > 0);
     }
 
@@ -906,6 +946,7 @@
         const now = new Date().toISOString();
         const note = {
             id: uid(), kind, title: '', pinned: false, pinnedAt: null,
+            finishNext: false, finishNextAt: null,
             folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
             created: now, updated: now
         };
@@ -1028,8 +1069,26 @@
             note.pinned = !note.pinned;
             /* Pinning is not an edit, so it must not bump `updated` — that
                would make a note you merely pinned look freshly written and
-               jump it up a recently-updated sort. */
-            note.pinnedAt = note.pinned ? new Date().toISOString() : null;
+               jump it up a recently-updated sort. It does need a date of
+               its own, though: `updated` is what every merge compares, so
+               a pin with no clock of its own is invisible to the reconcile
+               on the other device and gets thrown away as a note that
+               machine already has. The stamp is written on the way off as
+               well as on the way on — an unpin is a change like any other,
+               and clearing the field is what used to leave it undatable. */
+            note.pinnedAt = new Date().toISOString();
+            renderNotes();
+            commit();
+        } else if (e.target.closest('.act-finish')) {
+            /* The same shape as the pin, and deliberately nothing more:
+               the two flags never read each other, so flagging a note to
+               finish next leaves its pin exactly as it was and vice versa.
+               Only the band it is drawn in changes, and splitNotes settles
+               that. Marked at the same clock as the pin, and for the same
+               reason — it is not an edit, so it carries its own date or it
+               cannot survive the trip to another device. */
+            note.finishNext = !note.finishNext;
+            note.finishNextAt = new Date().toISOString();
             renderNotes();
             commit();
         } else if (e.target.closest('.act-del')) {
@@ -1076,7 +1135,27 @@
        TRASH
        ============================================================ */
 
+    /* Deleting a note asks first, and having asked, does not also offer an
+       Undo. The toast was a race against a clock: the delete button sits
+       next to the pin on every card, and a mis-click noticed once the
+       toast had gone had nothing left to press — the note was in the trash
+       tab, and you had to know that. A question answered before anything
+       happens is the cheaper of the two, and it is cheap precisely because
+       it is rare: nobody deletes a note by the dozen.
+
+       A file keeps its Undo. Dropping one on the board is a single motion
+       with nothing to re-read before committing to it, and interrupting a
+       drag-and-drop workflow to confirm each one is the friction this
+       dialog is worth avoiding. */
     function trashItem(kind, item) {
+        if (kind !== 'note') { binItem(kind, item); return; }
+        confirmAction('Delete this note?',
+            `“${titleOf(item)}” moves to the trash, where you can restore it ` +
+            `for ${CFG.TRASH_DAYS} days.`,
+            () => binItem(kind, item));
+    }
+
+    function binItem(kind, item) {
         const label = kind === 'note' ? titleOf(item) : item.name;
         if (kind === 'note') notes = notes.filter((n) => n.id !== item.id);
         else files = files.filter((f) => f.id !== item.id);
@@ -1088,7 +1167,8 @@
         /* The blob stays in the gist while a file is only trashed — there
            would be nothing to restore otherwise. Emptying the trash is
            what actually deletes it. */
-        toast(`${kind === 'note' ? 'Note' : 'File'} “${label}” moved to trash`, () => {
+        if (kind === 'note') { toast(`Note “${label}” moved to trash`); return; }
+        toast(`File “${label}” moved to trash`, () => {
             restoreFromTrash(item.id);
         });
     }
@@ -1593,11 +1673,14 @@
             `${notes.length} notes, ${files.length} files`,
             'This file is for reading. Use the .json export to restore.', ''
         ];
+        const band = (n) => (n.finishNext ? 2 : 0) + (n.pinned ? 1 : 0);
         notes.slice()
-            .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || NOTE_SORTS.updated(a, b))
+            .sort((a, b) => band(b) - band(a) || NOTE_SORTS.updated(a, b))
             .forEach((n) => {
+                const flags = [n.finishNext && '[finish next]', n.pinned && '[pinned]']
+                    .filter(Boolean).join(' ');
                 out.push(rule);
-                out.push(titleOf(n) + (n.pinned ? '   [pinned]' : ''));
+                out.push(titleOf(n) + (flags ? `   ${flags}` : ''));
                 const bits = [];
                 if (n.folder) bits.push(`folder: ${folderName(n.folder)}`);
                 if (isList(n)) bits.push('checklist');
