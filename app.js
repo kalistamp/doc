@@ -433,6 +433,7 @@
            on their way out, and filtering it by folder would only hide
            what you came here to find. */
         el('folder-bar').hidden = name === 'trash';
+        if (merging && name !== 'notes') setMerging(false);
         renderFolders();
         applyFilters();
     }
@@ -759,6 +760,10 @@
         return `
             <article class="note${n.pinned ? ' is-pinned' : ''}${isList(n) ? ' is-list' : ''}"
                      data-id="${esc(n.id)}">
+                <button class="note-pick" type="button" aria-pressed="false"
+                        aria-label="Pick note for merge">
+                    <span class="note-pick-num" aria-hidden="true"></span>
+                </button>
                 <input class="note-title${derived ? ' is-derived' : ''}" type="text"
                        value="${esc(n.title || '')}"
                        placeholder="${esc(derived || 'Untitled')}"
@@ -845,6 +850,7 @@
             sizeCard(card);
         });
         applyNoteFilters();
+        applyPicks();
     }
 
     /* Search and folder selection only change visibility. Cards remain the
@@ -968,7 +974,16 @@
            in the middle of a large docket. Find the exact note we created. */
         const card = Array.from(document.querySelectorAll('.note'))
             .find((candidate) => candidate.dataset.id === String(id));
-        const input = card && card.querySelector('.note-title');
+
+        /* The caret lands on the writing surface, not the title. A note left
+           untitled already borrows its first line for one, so opening in the
+           title field asks for something the note supplies on its own — and
+           the reason to press New note is nearly always to start typing. On
+           a checklist that surface is its first item, which is the same
+           place for the same reason: `.note-body` is not in that card at
+           all, so the fallback is a fallback only on paper. */
+        const input = card && (card.querySelector('.note-body') ||
+                               card.querySelector('.check-text'));
         if (!input) return;
 
         /* preventScroll avoids the browser's abrupt focus jump; the explicit
@@ -1042,6 +1057,12 @@
         if (!card) return;
         const note = findNote(card.dataset.id);
         if (!note) return;
+
+        /* While a merge is being picked the whole card is one control: the
+           pin, the folder and the delete on it all act on a board the pick
+           order is counted against, and the pick button is only there to
+           give the keyboard something to land on. */
+        if (merging) { togglePick(note.id); return; }
 
         if (e.target.closest('.check-box')) {
             const row = e.target.closest('.check-item');
@@ -1129,6 +1150,195 @@
         const card = e.target.closest('.note');
         const note = findNote(card.dataset.id);
         if (note) addChecklistItem(note, card);
+    });
+
+    /* ============================================================
+       MERGE
+
+       Two or more notes into one. The first note picked is the one that
+       survives: it keeps its id, its created date, its folder and both
+       band flags, and every other pick is appended into it in the order
+       it was picked. That order is the whole feature, so it is shown
+       rather than assumed — each picked card wears its number, and the
+       bar names the note the rest are going into.
+
+       The notes merged in go to the trash, not away. A merge is lossy in
+       one direction — a checklist folded into a note comes out as text —
+       and the trash is where this app keeps what it cannot undo for you.
+       The base note's own previous text is in the version history, which
+       is the same answer it gives for every other edit. Having asked
+       first, a merge does not also offer an Undo, for the reason a note
+       delete does not: a question answered before anything happens beats
+       a race against an eight-second clock.
+       ============================================================ */
+
+    let merging = false;
+
+    /* Note ids, in the order they were picked — an array and not a Set,
+       because the order is the point. */
+    let picked = [];
+
+    /* The rule drawn between two merged notes. Plain ASCII on purpose:
+       these bodies are read in a monospaced focus view, copied to the
+       clipboard and written into the .txt export, and a box-drawing
+       character survives none of those as dependably as three hyphens. */
+    const MERGE_RULE = '\n\n---\n\n';
+
+    function setMerging(on) {
+        merging = on;
+        picked = [];
+        el('panel-notes').classList.toggle('is-picking', on);
+        el('notes-bar').hidden = on;
+        el('merge-bar').hidden = !on;
+        applyPicks();
+    }
+
+    function togglePick(id) {
+        const at = picked.indexOf(String(id));
+        if (at === -1) picked.push(String(id)); else picked.splice(at, 1);
+        applyPicks();
+    }
+
+    /* Shaped like applyNoteFilters, and for the same reason: the cards are
+       already on the board, so picking one patches a class and a number
+       rather than rebuilding a grid and replaying every card's entry
+       animation. Renumbering after an un-pick is why every card is visited
+       and not only the one clicked. */
+    function applyPicks() {
+        /* A background sync can land mid-pick and take a note with it. */
+        picked = picked.filter((id) => findNote(id));
+
+        document.querySelectorAll('.note').forEach((card) => {
+            const note = findNote(card.dataset.id);
+            const pick = card.querySelector('.note-pick');
+            if (!note || !pick) return;
+            const at = picked.indexOf(card.dataset.id);
+            const label = at === -1 ? `Pick “${titleOf(note)}” for merge`
+                : at === 0 ? `First pick — “${titleOf(note)}” is what the others merge into`
+                : `Pick ${at + 1} — “${titleOf(note)}”`;
+
+            card.classList.toggle('is-picked', at !== -1);
+            card.classList.toggle('is-base', at === 0);
+            pick.setAttribute('aria-pressed', String(at !== -1));
+            pick.setAttribute('aria-label', label);
+            pick.title = label;
+            pick.querySelector('.note-pick-num').textContent = at === -1 ? '' : String(at + 1);
+        });
+
+        const base = findNote(picked[0]);
+        el('merge-go').disabled = picked.length < 2;
+        el('merge-lede').textContent = !base
+            ? 'Pick the notes to merge. The first one is what the rest go into.'
+            : picked.length === 1
+                ? `“${titleOf(base)}” goes first. Now pick what to merge into it.`
+                : `${picked.length} notes into “${titleOf(base)}”, in the order shown.`;
+    }
+
+    /* One note's contribution to a merged body.
+
+       Every note but the base is introduced by its own title. The base's
+       title is the merged note's title, so repeating it over its own text
+       would head a section that is in fact the whole note. A note with no
+       real title gets no heading either — its first line already stands
+       in for one, which is exactly what the board shows in its place.
+
+       Only the base keeps its leading whitespace. A note that deliberately
+       opens on a blank line is a shape worth preserving at the top of the
+       result; the same blank lines buried between two rules are only the
+       gap the rule is already drawing. */
+    function mergeBlock(note, isBase) {
+        const text = plainText(note);
+        const heading = isBase ? '' : (note.title || '').trim();
+        return [heading, isBase ? text.replace(/\s+$/, '') : text.trim()]
+            .filter(Boolean).join('\n\n');
+    }
+
+    const mergedBody = (list) =>
+        list.map((n, i) => mergeBlock(n, i === 0)).filter(Boolean).join(MERGE_RULE);
+
+    /* A merge keeps the kind its picks agree on. Checklists merged with
+       checklists stay a checklist; a mixed pick lands as text, which is
+       what a checklist has always rendered as outside itself — `[x] item`,
+       the same lines plainText writes into the .txt export. The other
+       direction has no honest answer: turning a note's lines into items
+       means guessing which of a thousand pasted lines were meant to be
+       tickable, and being wrong about most of them. */
+    function mergeNotes(list) {
+        const base = list[0];
+        const rest = list.slice(1);
+
+        /* One of these may be the note being typed into. Finish that
+           session first: a hot file left behind for a note that has just
+           been merged away is a note that walks back in on the next load. */
+        Store.checkpoint();
+
+        if (list.every(isList)) {
+            /* Fresh objects and fresh ids. The notes being merged in are on
+               their way to the trash rather than out of existence, and items
+               shared by reference would leave the merged note and its own
+               trashed source editing one array between them. */
+            base.items = list.reduce((all, n) => all.concat((n.items || [])
+                .map((i) => ({ id: uid(), text: i.text, done: Boolean(i.done) }))), []);
+        } else {
+            /* Read the whole pick before rewriting any of it. mergedBody
+               asks plainText what each note says, and plainText asks each
+               note what kind it is — so a base flattened before it is read
+               answers for a plain note, hands back the empty body it does
+               not have yet, and drops its own items out of the merge. */
+            const body = mergedBody(list);
+            base.kind = 'note';
+            base.body = body;
+            delete base.items;
+        }
+
+        /* The one edit in the operation. The picks that were merged away
+           are deleted rather than edited, and dating them now is precisely
+           how they would out-argue their own tombstones on the next
+           reconcile and walk back in from the other browser. */
+        base.updated = new Date().toISOString();
+
+        const gone = new Set(rest.map((n) => String(n.id)));
+        notes = notes.filter((n) => !gone.has(String(n.id)));
+        rest.forEach((n) => trash.unshift({
+            kind: 'note', item: n, deletedAt: base.updated
+        }));
+
+        setMerging(false);
+        renderAll();
+        commit();
+        toast(`${list.length} notes merged into “${titleOf(base)}”`);
+    }
+
+    el('merge-btn').addEventListener('click', () => {
+        if (notes.length < 2) {
+            toast('Two notes at least — there is nothing to merge yet');
+            return;
+        }
+        setMerging(true);
+    });
+
+    el('merge-cancel').addEventListener('click', () => setMerging(false));
+
+    el('merge-go').addEventListener('click', () => {
+        const list = picked.map(findNote).filter(Boolean);
+        if (list.length < 2) return;
+        const base = list[0];
+        const lists = list.filter(isList).length;
+
+        const body = [`They go into “${titleOf(base)}” in the order you picked them.`];
+        /* Say so before it happens rather than after: flattening a checklist
+           is the one part of a merge that cannot be read back off the
+           result. */
+        if (lists && lists < list.length) body.push(isList(base)
+            ? 'Not all of them are checklists, so it comes out as plain text.'
+            : 'The checklists among them come out as plain text.');
+        const rest = list.length - 1;
+        body.push(rest === 1
+            ? `The other one moves to the trash, where you can restore it for ${CFG.TRASH_DAYS} days.`
+            : `The other ${rest} move to the trash, where you can restore them for ${CFG.TRASH_DAYS} days.`);
+
+        confirmAction(`Merge ${list.length} notes?`, body.join(' '),
+            () => mergeNotes(list), 'Merge');
     });
 
     /* ============================================================
@@ -1837,9 +2047,16 @@
 
     let confirmFn = null;
 
-    function confirmAction(title, body, onOk) {
+    /** `ok` renames the confirm button and drops its danger colour, for
+     *  the questions that have to be asked before something that is not a
+     *  deletion. Left out, it stays the red Delete every caller wanted
+     *  when this only ever guarded one. */
+    function confirmAction(title, body, onOk, ok) {
         el('confirm-title').textContent = title;
         el('confirm-body').textContent = body;
+        el('confirm-ok').textContent = ok || 'Delete';
+        el('confirm-ok').classList.toggle('btn-danger', !ok);
+        el('confirm-ok').classList.toggle('btn-primary', Boolean(ok));
         confirmFn = onOk;
         el('confirm-modal').hidden = false;
         el('confirm-ok').focus();
@@ -1917,6 +2134,7 @@
         else if (!el('history-modal').hidden) el('history-modal').hidden = true;
         else if (!el('settings-modal').hidden) el('settings-modal').hidden = true;
         else if (!el('focus-modal').hidden) closeFocus();
+        else if (merging) setMerging(false);
     });
 
     ['settings-modal', 'confirm-modal'].forEach((id) => {

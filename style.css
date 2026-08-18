@@ -209,6 +209,21 @@ a { color: var(--accent); }
 .btn-sm { padding: .35em .8em; min-height: 34px; font-size: .84rem; }
 .btn-block { width: 100%; }
 
+/* Nothing else says a button is off. The picking bar's Merge spends its
+   first two clicks disabled and a history row disables its Restore while
+   the revision is being read — both looked live and silently did nothing.
+   The hover fills are put back by hand: they are set per variant, so
+   opacity alone leaves a dimmed button still lighting up under the
+   pointer. */
+.btn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+.btn:disabled:active { transform: none; }
+.btn-primary:disabled:hover { background: var(--accent); }
+.btn-ghost:disabled:hover { background: transparent; color: var(--ink-soft); }
+
 .btn-primary {
     background: var(--accent);
     color: var(--on-accent);
@@ -809,8 +824,10 @@ a { color: var(--accent); }
 }
 
 /* Programmatic focus/scroll lands at the writing controls with breathing
-   room even when browser chrome or a mobile keyboard reduces the viewport. */
-.note-title { scroll-margin-block: 18vh; }
+   room even when browser chrome or a mobile keyboard reduces the viewport.
+   A new note opens with the caret in its body — or, on a checklist, in its
+   first item — so all three are what that scroll can land on. */
+.note-title, .note-body, .check-text { scroll-margin-block: 18vh; }
 
 .note {
     /* Without this a card is free to be split across a column break,
@@ -966,6 +983,80 @@ a { color: var(--accent); }
    CSS: both wraps are hidden by the same filter pass that fills them, and
    a margin toggled from JS would be a third thing to keep in step. */
 #finish-wrap:not([hidden]) + #pinned-wrap > .band-title { margin-top: 1.6rem; }
+
+/* ---- merge -------------------------------------------------------
+
+   Picking notes for a merge turns the board into a selection surface.
+   The card becomes the control, which means the writing surfaces on it
+   have to stop taking clicks — reaching for a note otherwise lands a
+   caret in its body instead of picking it. */
+
+/* The picking bar stands exactly where the panel bar was, so the board
+   below it does not jump on the way in or out. */
+.merge-bar .merge-lede {
+    margin: 0;
+    min-width: 0;
+    font-size: .86rem;
+    color: var(--ink-soft);
+}
+
+/* Off the board entirely until there is a merge to pick for. One more
+   button on every card is a lot of furniture to leave lying about for
+   something used now and then. */
+.note-pick { display: none; }
+
+#panel-notes.is-picking .note { position: relative; cursor: pointer; }
+#panel-notes.is-picking .note:hover { border-color: var(--line-strong); }
+
+#panel-notes.is-picking .note-title,
+#panel-notes.is-picking .note-bodywrap,
+#panel-notes.is-picking .note-expand,
+#panel-notes.is-picking .note-foot {
+    pointer-events: none;
+    user-select: none;
+}
+
+#panel-notes.is-picking .note-pick {
+    display: grid; place-items: center;
+    position: absolute; top: .5rem; right: .5rem;
+    width: 26px; height: 26px; flex: none;
+    border: 1.5px solid var(--line-strong);
+    border-radius: var(--r-pill);
+    background: var(--surface);
+    color: var(--on-accent);
+    font-size: .74rem; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+/* The title sits under the badge and is an input, so it clips rather than
+   wrapping away from it. The room has to be made for it. */
+#panel-notes.is-picking .note-title { padding-right: 2.6rem; }
+
+#panel-notes.is-picking .note.is-picked {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-md), 0 0 0 3px var(--accent-wash);
+}
+#panel-notes.is-picking .note.is-picked .note-pick {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+/* The first pick is the note that survives the merge. A ring on its
+   number says so where the eye already is, rather than only in the bar
+   a scroll away at the top. */
+#panel-notes.is-picking .note.is-base .note-pick {
+    box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+/* A list row is already a row of controls, so the badge takes its place
+   at the head of it instead of floating over the title. */
+#panel-notes.is-picking[data-note-view="list"] .note-pick {
+    position: static;
+    margin-left: .5rem;
+}
+#panel-notes.is-picking[data-note-view="list"] .note-title { padding-right: .85rem; }
 
 /* ---- checklists --------------------------------------------------- */
 
@@ -1406,6 +1497,7 @@ code {
     .panel-bar .btn { flex: 1; }
     .panel-bar .sort { flex-basis: 100%; }
     #panel-notes .view-controls { flex: 1 1 100%; }
+    .merge-bar .merge-lede { flex-basis: 100%; }
     #panel-notes .view-controls .sort { flex: 1 1 0; min-width: 0; }
     .panel-bar .spacer { display: none; }
 

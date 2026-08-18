@@ -55,7 +55,10 @@ device; a device still holding the retired **Compact** setting comes up on
 **Small**, its nearest equivalent.
 
 Leave the title blank and the card borrows its first line — shown only, never
-written back, so typing a real title still just works.
+written back, so typing a real title still just works. That is also why a new
+note opens with the caret in its body rather than its title: the title has an
+answer already, and pressing **New note** almost always means you have
+something to type. A new list opens on its first item, for the same reason.
 
 **Pinning.** Pinned notes are lifted into their own band at the top, newest
 pin first, as many as you like. Pinning deliberately does *not* touch the
@@ -94,6 +97,40 @@ Lines wrap at every width rather than scrolling sideways. Preserving a code
 line's real shape sounds better than it reads: it puts half of every long
 line off-screen and leaves you working the scrollbar, which defeats the point
 of a view that exists to make a long note legible. Indentation survives.
+
+**Merging.** Two or more notes into one, on the **Merge** button in the
+Notes toolbar. It turns the board into a selection surface: every card takes
+a click, and each one you pick wears the number you picked it in. Nothing
+else on a card answers while it does — the pin, the folder and the delete
+all act on the board the pick order is being counted against.
+
+The first pick is the note that survives. It keeps its id, its title, its
+created date, its folder and both band flags, and every later pick is
+appended into it in the order shown. That order is the whole feature, so it
+is shown rather than assumed: the numbers say what arrives when, and the bar
+above names the note the rest are going into.
+
+Each note merged in is introduced by its own title, or by nothing if it has
+none — its first line is already doing that job. The note being merged into
+contributes its text bare, since its title is the merged note's title, and
+heading its own text with it would title a section that is the whole note.
+
+Checklists merged with checklists stay a checklist, items end to end. A
+mixed pick lands as text, because text is the only shape both kinds share: a
+checklist reads back as `[x] item`, the same lines the `.txt` export writes.
+The other direction has no honest answer — turning a note's lines into
+tickable items means guessing which of a thousand pasted lines were meant to
+be ticked, and being wrong about most of them. The dialog says so before it
+happens, flattening being the one part of a merge you cannot read back off
+the result afterwards.
+
+The notes merged in go to the trash rather than away, so the pick you did
+not mean is a Restore away and the surviving note's previous text is in the
+version history. Having asked first, a merge does not also offer an Undo —
+the same trade the note delete makes. And it travels like any other pair of
+edits: the surviving note wins on `updated`, and the ones it swallowed
+travel as the tombstones every other delete does, so a merge made here does
+not come undone by a browser elsewhere that still had all of them.
 
 **Files.** Drag and drop or browse. Each upload becomes its own file inside
 the gist, so it comes back down on any machine — download it, or copy a text

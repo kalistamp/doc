@@ -34,7 +34,19 @@ test('new notes focus and smoothly reveal the exact created card', () => {
     assert.match(app, /focus\(\{ preventScroll: true \}\)/);
     assert.match(app, /scrollIntoView\(\{[\s\S]*?behavior: 'smooth',[\s\S]*?block: 'center'/);
     assert.match(app, /el\('search'\)\.value = ''/);
-    assert.match(css, /\.note-title\s*\{\s*scroll-margin-block:/);
+});
+
+test('a new note opens with the caret in what you came to write in', () => {
+    /* The title borrows the first line of an untitled note, so opening in
+       the title field asks for something the note supplies on its own. */
+    const reveal = app.match(/function revealNewNote\(id\) \{([\s\S]*?)\n    \}/);
+    assert.ok(reveal, 'revealNewNote exists');
+    assert.match(reveal[1], /querySelector\('\.note-body'\) \|\|[\s\S]*?querySelector\('\.check-text'\)/,
+                 'the body, or a checklist\'s first item');
+    assert.doesNotMatch(reveal[1], /querySelector\('\.note-title'\)/);
+    /* And whichever it lands on has to carry the scroll margin, or the
+       reveal centres it under the browser chrome or a phone keyboard. */
+    assert.match(css, /\.note-title, \.note-body, \.check-text \{ scroll-margin-block:/);
 });
 
 test('the note view menu offers a list and four card sizes, and persists', () => {
@@ -172,4 +184,114 @@ test('deleting a note asks before it acts, and does not also offer Undo', () => 
        nothing. Both still say what happened. */
     assert.match(binItem[1], /toast\(`Note[^`]*`\);/);
     assert.match(binItem[1], /toast\(`File[^`]*`, \(\) => \{[\s\S]*?restoreFromTrash/);
+});
+
+/* ---- Merge ------------------------------------------------------------
+
+   Picking notes to merge turns the board into a selection surface, and the
+   composition rules themselves are exercised in merge.test.js. What is
+   asserted here is the wiring around them: that picking replaces the board's
+   normal controls rather than sitting beside them, and that every way out of
+   the mode actually leaves it. */
+
+test('picking replaces the notes bar rather than joining it', () => {
+    assert.match(html, /id="merge-btn"/, 'a Merge button opens the mode');
+    assert.match(html, /<div class="panel-bar" id="notes-bar">/);
+    assert.match(html, /<div class="panel-bar merge-bar" id="merge-bar" hidden>/);
+    /* Sort, view and New note all act on the board the pick order is
+       counted against, so they go away while it is being counted. */
+    const setMerging = app.match(/function setMerging\(on\) \{([\s\S]*?)\n    \}/);
+    assert.ok(setMerging, 'setMerging exists');
+    assert.match(setMerging[1], /el\('notes-bar'\)\.hidden = on/);
+    assert.match(setMerging[1], /el\('merge-bar'\)\.hidden = !on/);
+    assert.match(setMerging[1], /picked = \[\]/, 'and the picks do not outlive the mode');
+});
+
+test('the pick order is kept as an order, and shown as one', () => {
+    /* An array and not a Set: which note was picked first is the whole
+       feature, since it is the note the others are merged into. */
+    assert.match(app, /let picked = \[\]/);
+    assert.match(app, /picked\.push\(String\(id\)\)/);
+    assert.match(app, /note-pick-num'\)\.textContent = at === -1 \? '' : String\(at \+ 1\)/);
+    assert.match(app, /card\.classList\.toggle\('is-base', at === 0\)/);
+    assert.match(html, /id="merge-lede"/, 'and the bar names the note being merged into');
+});
+
+test('while picking, a card is one control and nothing else on it acts', () => {
+    /* The click handler is delegated for the whole panel, so the check has
+       to come before every other action it dispatches. */
+    const handler = app.match(/el\('panel-notes'\)\.addEventListener\('click', \(e\) => \{([\s\S]*?)\n    \}\);/);
+    assert.ok(handler, 'the notes click handler exists');
+    const guard = handler[1].indexOf('if (merging)');
+    assert.ok(guard > -1, 'picking is checked');
+    ['check-box', 'act-pin', 'act-finish', 'act-del', 'note-expand'].forEach((act) => {
+        assert.ok(guard < handler[1].indexOf(act), `${act} is dispatched after the check`);
+    });
+    /* And the writing surfaces stop taking clicks, or reaching for a note
+       lands a caret in its body instead of picking it. */
+    assert.match(css, /#panel-notes\.is-picking \.note-title,[\s\S]*?pointer-events: none/);
+    assert.match(css, /\.note-pick \{ display: none; \}/, 'and the badge is off the board otherwise');
+});
+
+test('every way out of picking leaves it', () => {
+    assert.match(app, /el\('merge-cancel'\)\.addEventListener\('click', \(\) => setMerging\(false\)\)/);
+    assert.match(app, /else if \(merging\) setMerging\(false\);/, 'Escape');
+    /* A pick order counted against the notes board means nothing on another
+       tab, and the bar it replaced is that tab's own. */
+    assert.match(app, /if \(merging && name !== 'notes'\) setMerging\(false\)/);
+    const merge = app.match(/function mergeNotes\(list\) \{([\s\S]*?)\n    \}/);
+    assert.match(merge[1], /setMerging\(false\)/, 'and the merge itself');
+});
+
+test('a re-render puts the pick numbers back', () => {
+    /* renderNotes repaints all three grids, so the numbers go with them —
+       and a background sync repaints on its own schedule, mid-pick. */
+    const render = app.match(/function renderNotes\(\) \{([\s\S]*?)\n    \}/);
+    assert.ok(render, 'renderNotes exists');
+    assert.match(render[1], /applyPicks\(\)/);
+    assert.match(app, /picked = picked\.filter\(\(id\) => findNote\(id\)\)/,
+                 'and a note the sync took with it drops out of the picks');
+});
+
+test('a merge asks first, and the question is not dressed as a deletion', () => {
+    const go = app.match(/el\('merge-go'\)\.addEventListener\('click', \(\) => \{([\s\S]*?)\n    \}\);/);
+    assert.ok(go, 'the Merge button has a handler');
+    assert.match(go[1], /confirmAction\(/, 'nothing is merged until the question is answered');
+    assert.doesNotMatch(go[1], /notes = notes\.filter/);
+    assert.match(go[1], /\(\) => mergeNotes\(list\), 'Merge'\)/, 'and the button says Merge');
+
+    const confirm = app.match(/function confirmAction\(title, body, onOk, ok\) \{([\s\S]*?)\n    \}/);
+    assert.ok(confirm, 'confirmAction takes a label');
+    assert.match(confirm[1], /textContent = ok \|\| 'Delete'/, 'and still defaults to Delete');
+    assert.match(confirm[1], /classList\.toggle\('btn-danger', !ok\)/);
+});
+
+test('the notes merged in go to the trash, and stay there', () => {
+    const merge = app.match(/function mergeNotes\(list\) \{([\s\S]*?)\n    \}/);
+    assert.ok(merge, 'mergeNotes exists');
+    assert.match(merge[1], /trash\.unshift\(\{\s*\n?\s*kind: 'note', item: n, deletedAt: base\.updated/);
+    /* store.js keeps a tombstone only while the item's own stamp is not
+       later than the deletion, so only the base may be dated. */
+    assert.match(merge[1], /base\.updated = new Date\(\)\.toISOString\(\)/);
+    assert.doesNotMatch(merge[1], /n\.updated =|rest\.forEach\(\(n\) => \{ n\.updated/);
+    /* And a hot file left behind for a note that has just been merged away
+       is a note that walks back in on the next load. */
+    assert.match(merge[1], /Store\.checkpoint\(\)/);
+});
+
+test('the merge icon is plain geometry, coloured by nothing of its own', () => {
+    const symbol = html.match(/<symbol id="i-merge"[\s\S]*?<\/symbol>/);
+    assert.ok(symbol, 'the sprite carries a merge glyph');
+    assert.match(symbol[0], /viewBox="0 0 24 24"/, 'on the same grid as every other icon');
+    assert.doesNotMatch(symbol[0], /fill=|stroke=|style=/);
+    assert.match(html, /<use href="#i-merge">/);
+});
+
+test('the cache buster moved with the scripts and the sheet', () => {
+    /* Pages serves this repo root; a returning visitor otherwise runs a
+       stale app.js against the new markup. */
+    assert.doesNotMatch(html, /\?v=11/);
+    ['style.css', 'config.js', 'store.js', 'app.js'].forEach((asset) => {
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=12`), `${asset} is busted`);
+    });
 });

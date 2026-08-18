@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=11">
+<link rel="stylesheet" href="./style.css?v=12">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
 </head>
 <body>
@@ -55,6 +55,7 @@
         <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
         <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 6a1 1 0 0 1 1-1h4l2 2.5h8a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6Z"/></symbol>
         <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6.5 5.5 8 8 5M4 12.5 5.5 14 8 11M4 18.5 5.5 20 8 17M11 6.5h9M11 12.5h9M11 18.5h9"/></symbol>
+        <symbol id="i-merge" viewBox="0 0 24 24"><path d="M5 3v5a4 4 0 0 0 4 4h6a4 4 0 0 0 4-4V3"/><path d="M12 12v8M8.5 16.5 12 20l3.5-3.5"/></symbol>
         <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.5 7.5 3 3"/></symbol>
         <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h11a5 5 0 0 1 0 10h-6M4 9l4-4M4 9l4 4"/></symbol>
         <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></symbol>
@@ -169,7 +170,7 @@
     <main>
         <!-- ---------------- NOTES ---------------- -->
         <section id="panel-notes" class="panel is-active" role="tabpanel">
-            <div class="panel-bar">
+            <div class="panel-bar" id="notes-bar">
                 <div class="view-controls">
                     <label class="sr-only" for="note-sort">Sort notes</label>
                     <select id="note-sort" class="sort">
@@ -189,11 +190,27 @@
                     </select>
                 </div>
                 <span class="spacer"></span>
+                <button id="merge-btn" class="btn btn-ghost" type="button">
+                    <svg class="ico"><use href="#i-merge"></use></svg> Merge
+                </button>
                 <button id="new-list-btn" class="btn btn-ghost" type="button">
                     <svg class="ico"><use href="#i-list"></use></svg> New list
                 </button>
                 <button id="new-note-btn" class="btn btn-primary" type="button">
                     <svg class="ico"><use href="#i-plus"></use></svg> New note
+                </button>
+            </div>
+
+            <!-- Picking notes replaces the panel bar rather than joining
+                 it: sort, view and New note all act on the board you are
+                 picking from, and a control that reorders it mid-pick would
+                 move the numbered cards out from under you. -->
+            <div class="panel-bar merge-bar" id="merge-bar" hidden>
+                <p class="merge-lede" id="merge-lede" role="status" aria-live="polite"></p>
+                <span class="spacer"></span>
+                <button id="merge-cancel" class="btn btn-ghost" type="button">Cancel</button>
+                <button id="merge-go" class="btn btn-primary" type="button" disabled>
+                    <svg class="ico"><use href="#i-merge"></use></svg> Merge
                 </button>
             </div>
 
@@ -441,8 +458,8 @@
     </button>
 </div>
 
-<script src="./config.js?v=11"></script>
-<script src="./store.js?v=11"></script>
-<script src="./app.js?v=11"></script>
+<script src="./config.js?v=12"></script>
+<script src="./store.js?v=12"></script>
+<script src="./app.js?v=12"></script>
 </body>
 </html>
