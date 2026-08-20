@@ -290,8 +290,72 @@ test('the merge icon is plain geometry, coloured by nothing of its own', () => {
 test('the cache buster moved with the scripts and the sheet', () => {
     /* Pages serves this repo root; a returning visitor otherwise runs a
        stale app.js against the new markup. */
-    assert.doesNotMatch(html, /\?v=11/);
+    assert.doesNotMatch(html, /\?v=12/);
     ['style.css', 'config.js', 'store.js', 'app.js'].forEach((asset) => {
-        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=12`), `${asset} is busted`);
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=13`), `${asset} is busted`);
     });
+});
+
+/* A modal that dismisses on a backdrop click cannot decide that on the
+   click's target alone. The target of a `click` is the nearest common
+   ancestor of where the button went down and where it came up, so a
+   selection begun on the card and released past its edge arrives at the
+   overlay indistinguishable from a click on the overlay — and dragging
+   past the edge is what selecting to the end of a line looks like. The
+   focus view was closing itself while its text was being selected to
+   copy, taking the selection with it. */
+
+/** Runs the real helper out of app.js against a stub overlay, so this
+ *  tests the behaviour rather than the spelling of the source. */
+function backdropHarness() {
+    const source = app.match(/const dismissOnBackdrop = \(id, close\) => \{[\s\S]*?\n {4}\};/);
+    assert.ok(source, 'dismissOnBackdrop exists');
+
+    const handlers = {};
+    const overlay = {
+        addEventListener(type, fn) { (handlers[type] = handlers[type] || []).push(fn); }
+    };
+    const fire = (type, target) => (handlers[type] || []).forEach((fn) => fn({ target }));
+
+    let closed = 0;
+    const build = new Function('el', `${source[0]}\nreturn dismissOnBackdrop;`);
+    build(() => overlay)('focus-modal', () => { closed += 1; });
+
+    /* What the browser reports for a press that starts on `from` and is
+       released on `to`: the click lands on their common ancestor, which
+       for anything inside the card is the overlay itself. */
+    const drag = (from, to) => {
+        fire('mousedown', from);
+        fire('mouseup', to);
+        fire('click', from === to ? from : overlay);
+    };
+    return { overlay, card: { id: 'focus-body' }, drag, count: () => closed };
+}
+
+test('a selection released past the card edge does not dismiss the modal', () => {
+    const h = backdropHarness();
+    h.drag(h.card, h.overlay);
+    assert.equal(h.count(), 0, 'the press began on the card, so no dismiss was meant');
+});
+
+test('a click that both starts and ends on the backdrop still dismisses', () => {
+    const h = backdropHarness();
+    h.drag(h.overlay, h.overlay);
+    assert.equal(h.count(), 1);
+});
+
+test('a drag off the card does not disarm the backdrop click after it', () => {
+    const h = backdropHarness();
+    h.drag(h.card, h.overlay);
+    h.drag(h.overlay, h.overlay);
+    assert.equal(h.count(), 1, 'the next genuine backdrop click still closes');
+});
+
+test('every modal dismisses through the guarded helper, none on a bare target test', () => {
+    ['focus-modal', 'settings-modal', 'confirm-modal',
+     'prompt-modal', 'folder-modal', 'history-modal'].forEach((id) => {
+        assert.ok(app.includes(`dismissOnBackdrop('${id}'`), `${id} is guarded`);
+    });
+    assert.doesNotMatch(app, /if \(e\.target === el\('[a-z-]+-modal'\)\)/,
+                        'no modal closes on the click target alone');
 });

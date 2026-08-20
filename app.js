@@ -41,6 +41,31 @@
     const $ = (sel) => document.querySelector(sel);
     const el = (id) => document.getElementById(id);
 
+    /** Dismiss a modal by clicking its backdrop — the overlay element
+     *  itself, never the card sitting on it.
+     *
+     *  Testing that with `e.target === overlay` alone is the trap. The
+     *  target of a `click` is the nearest common ancestor of where the
+     *  button went down and where it came up, so a press that starts on
+     *  the card and is released past its edge lands on the overlay and
+     *  is indistinguishable from a click on the overlay. Dragging past
+     *  the edge is exactly what selecting to the end of a line looks
+     *  like, so the focus view dismissed itself while its text was being
+     *  selected to copy — and took the selection with it.
+     *
+     *  Where the press *started* is what says a dismiss was meant; the
+     *  release only says where the mouse happened to stop. */
+    const dismissOnBackdrop = (id, close) => {
+        const modal = el(id);
+        let pressedBackdrop = false;
+        modal.addEventListener('mousedown', (e) => {
+            pressedBackdrop = e.target === modal;
+        });
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal && pressedBackdrop) close();
+        });
+    };
+
     const LS = {
         notes: 'docket.notes', files: 'docket.files', folders: 'docket.folders',
         trash: 'docket.trash', active: 'docket.activeFolder',
@@ -720,9 +745,7 @@
     el('folder-name').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); createFolder(); }
     });
-    el('folder-modal').addEventListener('click', (e) => {
-        if (e.target === el('folder-modal')) closeFolderModal();
-    });
+    dismissOnBackdrop('folder-modal', closeFolderModal);
 
     /* ============================================================
        NOTES
@@ -1618,9 +1641,7 @@
 
     el('focus-close').addEventListener('click', closeFocus);
     el('focus-done').addEventListener('click', closeFocus);
-    el('focus-modal').addEventListener('click', (e) => {
-        if (e.target === el('focus-modal')) closeFocus();
-    });
+    dismissOnBackdrop('focus-modal', closeFocus);
 
     el('focus-copy').addEventListener('click', async () => {
         const note = findNote(focusId);
@@ -2001,9 +2022,7 @@
     });
 
     el('history-close').addEventListener('click', () => { el('history-modal').hidden = true; });
-    el('history-modal').addEventListener('click', (e) => {
-        if (e.target === el('history-modal')) el('history-modal').hidden = true;
-    });
+    dismissOnBackdrop('history-modal', () => { el('history-modal').hidden = true; });
 
     /* ============================================================
        PROMPT + CONFIRM MODALS
@@ -2041,9 +2060,7 @@
     el('prompt-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); submitPrompt(); }
     });
-    el('prompt-modal').addEventListener('click', (e) => {
-        if (e.target === el('prompt-modal')) closePrompt();
-    });
+    dismissOnBackdrop('prompt-modal', closePrompt);
 
     let confirmFn = null;
 
@@ -2137,13 +2154,8 @@
         else if (merging) setMerging(false);
     });
 
-    ['settings-modal', 'confirm-modal'].forEach((id) => {
-        el(id).addEventListener('click', (e) => {
-            if (e.target !== el(id)) return;
-            if (id === 'confirm-modal') closeConfirm();
-            else el(id).hidden = true;
-        });
-    });
+    dismissOnBackdrop('settings-modal', () => { el('settings-modal').hidden = true; });
+    dismissOnBackdrop('confirm-modal', closeConfirm);
 
     /* ============================================================
        RENDER + CLOCK
