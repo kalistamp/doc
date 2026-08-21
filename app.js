@@ -130,6 +130,77 @@
     const noteText = (n) =>
         isList(n) ? (n.items || []).map((i) => i.text).join('\n') : (n.body || '');
 
+    /* ---- Markdown ------------------------------------------------------
+
+       A note holding Markdown is shown rendered rather than as the source
+       you typed, because reading `## Heading` is not what writing it was
+       for. Which notes those are is decided by looking at them —
+       markdown.js scores the usual syntax — and `markdown` on the note is
+       the override for when that reads wrong.
+
+       That field is deliberately three-valued: `true` and `false` are
+       answers you gave, and absent is "nobody has said", which is what
+       every note written before this existed says. Two values could not
+       tell "show this as plain text" apart from "never asked".
+
+       Detection and rendering both walk the whole body, and renderNotes
+       runs on every pin, search, delete and background sync. One memo per
+       note, discarded the moment that note's text changes, is what keeps a
+       board of a hundred Markdown notes from re-parsing all of them
+       because a keystroke landed in one. */
+
+    const MD = window.DocketMarkdown;
+    const mdMemo = new Map();
+
+    function markdownMemo(n) {
+        const id = String(n.id);
+        const body = n.body || '';
+        let entry = mdMemo.get(id);
+        if (!entry || entry.body !== body) {
+            entry = { body, looks: null, html: null };
+            mdMemo.set(id, entry);
+        }
+        return entry;
+    }
+
+    /** Is this note drawn as Markdown right now? */
+    function showsMarkdown(n) {
+        if (!n || isList(n)) return false;
+        if (typeof n.markdown === 'boolean') return n.markdown;
+        const entry = markdownMemo(n);
+        if (entry.looks === null) entry.looks = MD.looksLikeMarkdown(entry.body);
+        return entry.looks;
+    }
+
+    const markdownHtml = (n) => {
+        const entry = markdownMemo(n);
+        if (entry.html === null) entry.html = MD.render(entry.body);
+        return entry.html;
+    };
+
+    /* An id never comes back, so a memo for a note that has been deleted or
+       merged away is dead weight. Swept on the render that notices, rather
+       than on every one — the sweep is the expensive half. */
+    function pruneMarkdownMemo() {
+        if (mdMemo.size <= notes.length + 16) return;
+        const live = new Set(notes.map((n) => String(n.id)));
+        mdMemo.forEach((_, id) => { if (!live.has(id)) mdMemo.delete(id); });
+    }
+
+    /* Which way a note is drawn is a view choice, not an edit, so this
+       takes the shape the pin takes: `updated` is left alone, because a
+       note you merely switched must not jump up a recently-updated sort,
+       and a stamp of its own is written instead — `updated` is what every
+       merge compares, so without one the switch would be invisible to the
+       other device and thrown away. Written in both directions, for the
+       reason the pin's is. */
+    function setMarkdown(note, on) {
+        note.markdown = on;
+        note.markdownAt = new Date().toISOString();
+        renderNotes();
+        commit();
+    }
+
     /* An untitled note shows its first line as the title instead of the
        word "Untitled". It is shown, never stored — so typing a real title
        still works and nothing is silently rewritten under you. */
@@ -285,14 +356,15 @@
        caret, a text selection and a scroll position. Bodies are left out:
        every edit to one bumps `updated`, and hashing a thousand-line note
        on a timer to learn what its timestamp already says is waste.
-       `pinned` and `finishNext` are in, because neither deliberately
-       bumps it. */
+       `pinned`, `finishNext` and `markdown` are in, because none of the
+       three deliberately bumps it. */
     const fingerprint = () => [notes, files, folders, trash].map((list) =>
         (list || []).map((row) => {
             const item = row.item || row;
             return [item.id, item.updated || item.added || item.created || '',
                     row.deletedAt || '', row.purged ? 1 : 0,
-                    item.pinned ? 1 : 0, item.finishNext ? 1 : 0].join('~');
+                    item.pinned ? 1 : 0, item.finishNext ? 1 : 0,
+                    String(item.markdown)].join('~');
         }).join(',')).join('|');
 
     /**
@@ -776,7 +848,14 @@
 
     function noteCard(n) {
         const derived = !((n.title || '').trim()) && derivedTitle(n);
-        const body = isList(n) ? checklistMarkup(n) : `
+        const markdown = showsMarkdown(n);
+        /* A rendered note is read, not typed into — there is no caret to
+           put in a <div>. The card is still where the note lives, so a
+           click on it opens the focus view, which is where the toggle back
+           to plain text and the writing surface both are. */
+        const body = isList(n) ? checklistMarkup(n) : markdown
+            ? `<div class="note-md md-body">${markdownHtml(n)}</div>`
+            : `
             <textarea class="note-body" placeholder="Start typing…"
                       aria-label="Note body"></textarea>`;
 
@@ -807,6 +886,12 @@
                         ${n.folder ? `<span>${esc(folderName(n.folder))}</span>` : ''}
                     </button>
                     <span class="note-stamp">${esc(relTime(n.updated))}</span>
+                    ${isList(n) ? '' : `<button class="note-act act-md${markdown ? ' is-on' : ''}" type="button"
+                            title="${markdown ? 'Show as plain text' : 'Preview as Markdown'}"
+                            aria-pressed="${markdown ? 'true' : 'false'}"
+                            aria-label="${markdown ? 'Show this note as plain text' : 'Preview this note as Markdown'}">
+                        <svg class="ico"><use href="#i-markdown"></use></svg>
+                    </button>`}
                     <button class="note-act act-finish${n.finishNext ? ' is-on' : ''}" type="button"
                             title="${n.finishNext ? 'Remove from Finish Next' : 'Finish next'}"
                             aria-pressed="${n.finishNext ? 'true' : 'false'}"
@@ -856,6 +941,7 @@
     function renderNotes() {
         const { finish, pinned, rest } = splitNotes();
 
+        pruneMarkdownMemo();
         el('notes-empty').hidden = notes.length !== 0;
         el('finish-grid').innerHTML = finish.map(noteCard).join('');
         el('pinned-grid').innerHTML = pinned.map(noteCard).join('');
@@ -919,7 +1005,7 @@
         if (view === 'list') {
             const ta = card.querySelector('.note-body');
             if (ta) ta.style.height = '';
-            const wrap = card.querySelector('.check-wrap');
+            const wrap = card.querySelector('.check-wrap, .note-md');
             if (wrap) wrap.style.maxHeight = '';
             card.classList.remove('is-clamped');
             return;
@@ -930,8 +1016,12 @@
         const minimum = metrics.minimum || 96;
         let clamped;
 
-        if (isList(n)) {
-            const wrap = card.querySelector('.check-wrap');
+        /* A rendered Markdown body clamps the way a checklist does — by
+           capping the block — rather than the way a textarea does, whose
+           height has to be set for it because it does not grow on its
+           own. */
+        const wrap = card.querySelector('.check-wrap, .note-md');
+        if (wrap) {
             wrap.style.maxHeight = 'none';
             clamped = wrap.scrollHeight > limit;
             wrap.style.maxHeight = clamped ? `${limit}px` : '';
@@ -976,6 +1066,8 @@
         const note = {
             id: uid(), kind, title: '', pinned: false, pinnedAt: null,
             finishNext: false, finishNextAt: null,
+            /* Null, not false: nobody has said yet, so detection decides. */
+            markdown: null, markdownAt: null,
             folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
             created: now, updated: now
         };
@@ -1109,6 +1201,17 @@
             openFolderModal({ kind: 'note', id: note.id });
         } else if (e.target.closest('.note-expand')) {
             openFocus(note.id);
+        } else if (e.target.closest('.act-md')) {
+            /* Whatever it is showing, show the other one — and record that
+               as this note's answer, so detection stops being asked. */
+            setMarkdown(note, !showsMarkdown(note));
+        } else if (e.target.closest('.note-md')) {
+            /* A rendered body has no caret to click into, so a click on it
+               opens the note where it can be read in full and switched
+               back — the same answer a List row's chevron gives, for the
+               same reason. A link inside it is left alone: following it is
+               what clicking it meant. */
+            if (!e.target.closest('a')) openFocus(note.id);
         } else if (e.target.closest('.act-pin')) {
             note.pinned = !note.pinned;
             /* Pinning is not an edit, so it must not bump `updated` — that
@@ -1524,20 +1627,42 @@
         el('focus-title').value = note.title || '';
         el('focus-title').placeholder = derivedTitle(note) || 'Untitled';
 
-        const list = isList(note);
-        el('focus-body').hidden = list;
-        el('focus-items').hidden = !list;
-        if (list) renderFocusItems(note);
-        else el('focus-body').value = note.body || '';
-
+        renderFocusBody(note);
         updateFocusMeta();
         el('focus-modal').hidden = false;
         document.body.classList.add('is-locked');
-        if (!list) {
+        /* The caret goes where there is one to put. A rendered note is
+           read rather than typed into, so it is scrolled to the top
+           instead and left for the toggle. */
+        if (el('focus-body').hidden) {
+            el('focus-md').scrollTop = 0;
+        } else {
             el('focus-body').focus();
             el('focus-body').setSelectionRange(0, 0);
             el('focus-body').scrollTop = 0;
         }
+    }
+
+    /* Which of the three surfaces this note is shown on — a textarea, a
+       rendered block, or a checklist — and the toggle set to match. */
+    function renderFocusBody(note) {
+        const list = isList(note);
+        const markdown = showsMarkdown(note);
+
+        el('focus-body').hidden = list || markdown;
+        el('focus-md').hidden = list || !markdown;
+        el('focus-items').hidden = !list;
+        el('focus-mode').hidden = list;
+
+        if (list) { renderFocusItems(note); return; }
+        if (markdown) el('focus-md').innerHTML = markdownHtml(note);
+        else el('focus-body').value = note.body || '';
+
+        el('focus-mode').querySelectorAll('.seg-btn').forEach((btn) => {
+            const on = (btn.dataset.mode === 'markdown') === markdown;
+            btn.classList.toggle('is-on', on);
+            btn.setAttribute('aria-pressed', String(on));
+        });
     }
 
     function renderFocusItems(note) {
@@ -1562,7 +1687,9 @@
             el('focus-meta').textContent =
                 `${items.filter((i) => i.done).length} of ${items.length} done`;
         } else {
-            const body = el('focus-body').value;
+            /* The note, not the textarea: while the Markdown preview is up
+               the textarea is empty and holds nothing to count. */
+            const body = note.body || '';
             const words = body.trim() ? body.trim().split(/\s+/).length : 0;
             el('focus-meta').textContent =
                 `${lineCount(body).toLocaleString()} lines · ${words.toLocaleString()} words`;
@@ -1637,6 +1764,22 @@
                 el('focus-items').contains(active);
             if (!stillEditing) Store.checkpoint(id);
         }, 0);
+    });
+
+    /* The manual override. Detection is a guess made from the text, and
+       this is where you tell it that it guessed wrong — for this note,
+       from now on, on every device. */
+    el('focus-mode').addEventListener('click', (e) => {
+        const btn = e.target.closest('.seg-btn');
+        const note = findNote(focusId);
+        if (!btn || !note) return;
+        const markdown = btn.dataset.mode === 'markdown';
+        if (markdown === showsMarkdown(note)) return;
+        setMarkdown(note, markdown);
+        renderFocusBody(note);
+        /* Switching back to plain text is nearly always the first half of
+           an edit, so the caret goes with it. */
+        if (!markdown) el('focus-body').focus();
     });
 
     el('focus-close').addEventListener('click', closeFocus);

@@ -236,51 +236,59 @@
         return Number.isFinite(time) ? time : 0;
     };
 
-    /* ---------- the band flags' own clocks ------------------------------ */
+    /* ---------- the switches with clocks of their own ------------------- */
 
     /* Every other change to a note is dated by `updated`, and every
-       reconciliation below picks a whole winner by comparing it. Two
-       changes deliberately opt out — pinning a note, and marking it to
-       finish next. Neither is an edit, and a note you merely flagged must
-       not look freshly written and jump up a recently-updated sort.
+       reconciliation below picks a whole winner by comparing it. Three
+       changes deliberately opt out — pinning a note, marking it to finish
+       next, and switching it between Markdown and plain text. None is an
+       edit, and a note you merely flagged or re-drew must not look freshly
+       written and jump up a recently-updated sort.
 
-       That leaves both flags invisible to those comparisons. Two copies of
+       That leaves all three invisible to those comparisons. Two copies of
        a note differing only in a flag are identical in every field the
        comparison reads, so the flag never travels on its own merit — it
        survives only where the tie happens to fall, which is always the
        browser doing the reconciling. A pin made HERE is kept, and a pin
        made anywhere else is dropped, then written back out as an unpin.
 
-       So each flag carries its own stamp and is reconciled on its own
-       axis: whichever side changed that flag last says what it is, whoever
-       wins the note itself. The stamp is written when the flag comes off as
+       So each carries its own stamp and is reconciled on its own axis:
+       whichever side changed that switch last says what it is, whoever
+       wins the note itself. The stamp is written when a flag comes off as
        well as when it goes on — clearing one is a change like any other and
        needs a date, or it could never out-argue the flag it undoes. Only a
        set flag's stamp is ever read for anything else (its band orders by
        it), so carrying one on a note that is not flagged costs nothing.
 
-       The two axes are separate, so a pin made here and a Finish Next made
-       on the phone both land on the same note rather than one of them
-       taking the other's place. */
+       The axes are separate, so a pin made here and a Finish Next made on
+       the phone both land on the same note rather than one of them taking
+       the other's place. */
 
-    const BAND_FLAGS = [
-        { on: 'pinned', at: 'pinnedAt' },
-        { on: 'finishNext', at: 'finishNextAt' }
+    const STAMPED = [
+        { on: 'pinned', at: 'pinnedAt', cast: (v) => !!v },
+        { on: 'finishNext', at: 'finishNextAt', cast: (v) => !!v },
+        /* `markdown` is the odd one: three-valued, because absent means
+           "nobody has said, so look at the text" and that is what every
+           note written before the preview existed says. Cast to a boolean
+           it would arrive as a decision nobody made — every old note
+           pinned to plain text the first time it travelled. */
+        { on: 'markdown', at: 'markdownAt', cast: (v) => (v == null ? null : !!v) }
     ];
 
     const flagTime = (item, key) => Date.parse((item && item[key]) || '') || 0;
 
-    /** The winning copy of an item, wearing whichever side set each band
-     *  flag most recently. Copies rather than mutates: both dockets belong
-     *  to their callers. A tie keeps the winner's own flag, which is what
+    /** The winning copy of an item, wearing whichever side set each stamped
+     *  switch most recently. Copies rather than mutates: both dockets belong
+     *  to their callers. A tie keeps the winner's own value, which is what
      *  makes a docket written before the flags were stamped — or before
-     *  Finish Next existed at all — merge as it always did. */
+     *  Finish Next or the Markdown preview existed at all — merge as it
+     *  always did. */
     function withFlags(winner, loser) {
         if (!loser || loser === winner) return winner;
         let out = winner;
-        BAND_FLAGS.forEach(({ on, at }) => {
+        STAMPED.forEach(({ on, at, cast }) => {
             if (flagTime(loser, at) <= flagTime(out, at)) return;
-            out = Object.assign({}, out, { [on]: !!loser[on], [at]: loser[at] || null });
+            out = Object.assign({}, out, { [on]: cast(loser[on]), [at]: loser[at] || null });
         });
         return out;
     }
@@ -295,7 +303,7 @@
        still carries a `pinned` field, so replacing wholesale would quietly
        strip the pin off again — this time before the merge downstream ever
        sees it. Both directions therefore go through withFlags, which does
-       the same for Finish Next. */
+       the same for Finish Next and for the Markdown switch. */
     function overlayHot(data, records) {
         const byId = new Map(data.notes.map((note, index) => [String(note.id), index]));
         records.sort((a, b) => noteTime(a.note) - noteTime(b.note));
@@ -436,15 +444,16 @@
             if (index == null) { at.set(id, out.length); out.push(item); return; }
             const held = out[index];
             const winner = stampOf(item) >= stampOf(held) ? item : held;
-            /* The loser is not discarded outright: the band flags it
-               carries are dated on their own clocks and may be the later
-               word, whichever copy of the note itself won. */
+            /* The loser is not discarded outright: the band flags and the
+               Markdown switch it carries are dated on clocks of their own
+               and may be the later word, whichever copy of the note itself
+               won. */
             out[index] = withFlags(winner, winner === item ? held : item);
         };
         /* Local goes second, and a tie goes to whoever went second, so the
            browser doing the reconciling keeps its own copy when neither
-           side is newer. That settles the note; `pinnedAt` and
-           `finishNextAt` settle the band flags, which are the changes that
+           side is newer. That settles the note; `pinnedAt`, `finishNextAt`
+           and `markdownAt` settle the switches, which are the changes that
            deliberately never bump `updated` and so can never win that
            comparison on their own. */
         (remote || []).forEach(take);

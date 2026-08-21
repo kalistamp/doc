@@ -60,6 +60,37 @@ note opens with the caret in its body rather than its title: the title has an
 answer already, and pressing **New note** almost always means you have
 something to type. A new list opens on its first item, for the same reason.
 
+**Markdown.** A note that reads like Markdown is drawn the way GitHub would
+draw it — headings, lists, tables, code blocks, task boxes, quotes, links —
+rather than as the syntax you typed at it. Nothing has to be turned on:
+`markdown.js` scores the usual constructs and decides per note. A fenced
+code block, the row of dashes under a table header and a `- [ ]` box each
+say Markdown on their own, because nothing else writes them by accident.
+A heading or a list has to agree with something else, so a shell script
+full of `#` comments and a pasted file full of asterisks stay the text they
+are. A false positive costs a note its indentation until you say otherwise;
+a false negative costs a click. The scoring leans that way on purpose.
+
+It will still be wrong sometimes, which is what the **Plain text ·
+Markdown** switch is for: the MD button in a card's footer, and the same
+choice spelled out in the head of the focus view. Pressing it is that
+note's answer from then on, and it is the note's rather than the device's —
+see *Two machines at once*.
+
+A rendered card has no caret to click into, so clicking one opens the focus
+view, where switching back to plain text hands you the caret with it. A
+link inside a note is followed rather than intercepted.
+
+Two things it deliberately will not do. Raw HTML in a note is shown as the
+characters you typed rather than rendered: a note is where you paste things
+you did not write, and running those as live HTML inside a tab holding a
+GitHub token is not a trade worth making. `javascript:` and `data:` link
+targets go the same way, as plain text. And a single newline is a line
+break here — the way it is in a GitHub comment, not the way it is in a
+README — because pressing Enter and getting a new line is what writing a
+note means, and gluing the lines back together is the surprise that makes
+people give up on Markdown for notes.
+
 **Pinning.** Pinned notes are lifted into their own band at the top, newest
 pin first, as many as you like. Pinning deliberately does *not* touch the
 updated stamp: it is not an edit, and a note you merely pinned should not
@@ -184,6 +215,7 @@ index.html   markup, inline SVG icon sprite, pre-paint theme bootstrap
 style.css    design tokens + layout; dark mode is token overrides only
 config.js    filenames, limits, passkey — no credentials
 store.js     gist read/write: debounce, write queue, lazy blobs, errors
+markdown.js  Markdown detection and rendering — no dependencies, no CDN
 app.js       notes, files, focus view, tabs, modals, rendering
 ```
 
@@ -294,6 +326,15 @@ case the separation exists for: pin a note here, mark it to finish next on
 your phone, and neither change bumped `updated`, so the note itself is a tie
 whichever way you look at it. A single clock settles that once and drops the
 other machine's change. Two clocks land both.
+
+The Markdown switch is the third of these, on `markdownAt`, and travels by
+the same route for the same reason. It differs from the other two in being
+three-valued rather than two: `true` and `false` are answers you gave, and
+*absent* is nobody having said, which is what every note written before the
+preview existed says and what leaves detection free to decide. Reconciling
+it as a plain boolean is the bug that shape avoids — every one of those
+notes would arrive at the other machine pinned to plain text by a decision
+no one made.
 
 The same overlay guards the hot file. A note being typed on one machine is
 a snapshot that knows nothing of a pin another machine has put on it since,

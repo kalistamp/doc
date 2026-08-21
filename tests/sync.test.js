@@ -450,6 +450,97 @@ test('a Finish Next survives an edit made to the same note on the other machine'
     assert.equal(merged.finishNext, true, 'and the mark rides along');
 });
 
+/* ---- the Markdown switch ----------------------------------------------
+
+   Whether a note is drawn as Markdown or as plain text is the third
+   change that deliberately does not bump `updated`, and it therefore
+   needs the same treatment the two band flags get: a clock of its own, or
+   it never survives the trip. The one thing it does not share with them
+   is being a boolean — absent means "nobody has said, so look at the
+   text", and that has to survive too. */
+
+test('a note switched to plain text on the phone stays plain on the laptop', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* Both copies are the same note. Nothing about the switch touched
+       `updated`, so the note itself is a tie — and a tie always keeps
+       whatever the browser doing the reconciling already had. */
+    const remote = docket([{ id: 'n', body: '# looks like markdown', updated: iso(0),
+                             markdown: false, markdownAt: iso(5) }]);
+    const local = docket([{ id: 'n', body: '# looks like markdown', updated: iso(0) }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.markdown, false, 'the answer given elsewhere arrives');
+    assert.equal(merged.markdownAt, iso(5), 'and brings its date with it');
+});
+
+test('the later switch wins, whichever copy of the note wins', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    const remote = docket([{ id: 'n', body: 'rewritten', updated: iso(9),
+                             markdown: false, markdownAt: iso(1) }]);
+    const local = docket([{ id: 'n', body: 'old', updated: iso(0),
+                            markdown: true, markdownAt: iso(6) }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.body, 'rewritten', 'the later edit still wins the note');
+    assert.equal(merged.markdown, true, 'and the later switch still wins the switch');
+});
+
+test('a docket written before the preview existed still auto-detects', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* The trap a plain boolean cast would set: neither copy has ever said
+       anything, and coercing that to `false` on the way through would pin
+       every old note to plain text the first time it travelled. */
+    const remote = docket([{ id: 'n', body: '# heading\n\n- a\n- b', updated: iso(0) }]);
+    const local = docket([{ id: 'n', body: '# heading\n\n- a\n- b', updated: iso(0) }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.notEqual(merged.markdown, false, 'nothing was decided on its behalf');
+    assert.ok(merged.markdown == null, 'it is still absent, which means "look at the text"');
+});
+
+test('the three stamped switches are settled on three separate axes', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* One shared clock would drop two of these three: none of them bumps
+       `updated`, so the note itself is a tie however you look at it. */
+    const remote = docket([{ id: 'n', body: 'same', updated: iso(0),
+                             pinned: false, pinnedAt: null,
+                             finishNext: true, finishNextAt: iso(5),
+                             markdown: false, markdownAt: iso(7) }]);
+    const local = docket([{ id: 'n', body: 'same', updated: iso(0),
+                            pinned: true, pinnedAt: iso(3),
+                            finishNext: false, finishNextAt: null }]);
+
+    const merged = only.Store.merge(remote, local).notes[0];
+    assert.equal(merged.pinned, true, 'the pin made here survives');
+    assert.equal(merged.finishNext, true, 'the mark made there arrives');
+    assert.equal(merged.markdown, false, 'and so does the switch made there');
+});
+
+test('a stale hot file does not strip a switch the archive has since gained', () => {
+    const server = gistServer(docket([]));
+    const only = browser('solo', server);
+
+    /* A hot file is a snapshot of a note as one browser was typing it. It
+       knows nothing of a switch another browser has thrown since, and
+       folding it in wholesale would undo that before the merge ever saw
+       it — the same hole the pin fell down. */
+    const archive = docket([{ id: 'n', body: 'typed', updated: iso(2),
+                              markdown: true, markdownAt: iso(8) }]);
+    const hot = { id: 'n', body: 'typed further', updated: iso(9) };
+
+    const merged = only.Store.merge(archive, docket([hot])).notes[0];
+    assert.equal(merged.body, 'typed further', 'the newer text wins');
+    assert.equal(merged.markdown, true, 'and the switch it never knew about survives');
+});
+
 test('a docket written before Finish Next existed merges as it always did', () => {
     const server = gistServer(docket([]));
     const only = browser('solo', server);

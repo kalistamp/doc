@@ -714,6 +714,17 @@ a { color: var(--accent); }
     padding: .35rem .8rem .72rem;
     font-size: .88rem;
 }
+/* The narrowest card carries the same six things in its footer as the
+   widest one, and the Markdown switch was the item that took it past what
+   230px holds — the stamp lost its line and wrapped to three. The row
+   gives up spacing rather than a control: everything here is still on the
+   card, just closer together. */
+#panel-notes[data-note-view="small"] .note-foot {
+    gap: .12rem;
+    padding: .4rem .45rem .4rem .7rem;
+}
+#panel-notes[data-note-view="small"] .note-act { width: 30px; height: 30px; }
+#panel-notes[data-note-view="small"] .note-stamp { font-size: .7rem; }
 
 #panel-notes[data-note-view="large"] .note-grid {
     columns: 440px;
@@ -944,6 +955,10 @@ a { color: var(--accent); }
     font-size: .74rem;
     color: var(--ink-faint);
     font-variant-numeric: tabular-nums;
+    /* "5 min ago" is three words, and a footer one control too full for
+       them turns that into three lines and a card an inch taller. It
+       shortens instead. */
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 .note-act {
@@ -1215,6 +1230,190 @@ a { color: var(--accent); }
     font-size: .78rem; color: var(--ink-faint);
     font-variant-numeric: tabular-nums;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ============================================================
+   MARKDOWN
+
+   One block of typography for both places a rendered note appears — a
+   card body and the focus view — so there is a single answer to what a
+   heading or a table looks like. The two differ only in scale, which is
+   set on the container below.
+
+   Every colour here is a token, so dark mode needs nothing of its own:
+   the sheet's overrides at the top of the file carry through.
+   ============================================================ */
+
+.md-body {
+    color: var(--ink-soft);
+    overflow-wrap: break-word;
+    /* A code line, a table or a long URL is wider than the note it is in.
+       Each of those scrolls inside itself below; this stops anything that
+       slips through from widening the card and the board with it. */
+    overflow: hidden;
+}
+
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+
+.md-body p { margin: 0 0 .75em; }
+
+.md-body h1, .md-body h2, .md-body h3,
+.md-body h4, .md-body h5, .md-body h6 {
+    margin: 1.3em 0 .5em;
+    color: var(--ink);
+    font-family: var(--font-display);
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -.01em;
+}
+.md-body h1 { font-size: 1.5em; }
+.md-body h2 { font-size: 1.28em; }
+.md-body h3 { font-size: 1.12em; }
+.md-body h4 { font-size: 1em; }
+.md-body h5, .md-body h6 { font-size: .92em; color: var(--ink-soft); }
+
+/* The rule under the top two levels is what makes a rendered note read
+   like a document rather than like bold text at intervals. */
+.md-body h1, .md-body h2 {
+    padding-bottom: .25em;
+    border-bottom: 1px solid var(--line);
+}
+
+.md-body strong { color: var(--ink); font-weight: 650; }
+.md-body em { font-style: italic; }
+.md-body del { color: var(--ink-faint); }
+
+.md-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md-body a:hover { color: var(--accent-deep); }
+
+.md-body ul, .md-body ol { margin: 0 0 .75em; padding-left: 1.5em; }
+.md-body li { margin: .18em 0; }
+.md-body li > ul, .md-body li > ol { margin: .18em 0 0; }
+
+/* A task item's marker is the checkbox, so the list's own is dropped and
+   the row pulled back into line with the text above it. */
+.md-body li.md-task { list-style: none; margin-left: -1.35em; }
+.md-body li.md-task input { margin-right: .45em; accent-color: var(--accent); }
+
+.md-body blockquote {
+    margin: 0 0 .75em;
+    padding: .1em 0 .1em .9em;
+    border-left: 3px solid var(--line-strong);
+    color: var(--ink-faint);
+}
+
+.md-body code {
+    padding: .15em .38em;
+    border-radius: 5px;
+    background: var(--bg-tint);
+    font-family: var(--font-mono);
+    font-size: .88em;
+    color: var(--ink);
+}
+
+.md-body pre {
+    margin: 0 0 .8em;
+    padding: .75em .9em;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    /* A code block is the one thing here that does NOT wrap: its lines
+       have a shape, and a scroller of its own is how it keeps it without
+       taking the note sideways with it. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+.md-body pre code {
+    padding: 0;
+    background: none;
+    font-size: .86em;
+    line-height: 1.55;
+    white-space: pre;
+    tab-size: 4;
+}
+
+.md-body hr {
+    margin: 1.1em 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+}
+
+.md-body img { max-width: 100%; height: auto; border-radius: var(--r-sm); }
+
+/* Same reasoning as the code block: a five-column table is wider than a
+   card, and this is the box it is allowed to be wider inside. */
+.md-tablewrap { margin: 0 0 .8em; overflow-x: auto; overscroll-behavior-x: contain; }
+.md-body table { border-collapse: collapse; font-size: .92em; }
+.md-body th, .md-body td {
+    padding: .35em .7em;
+    border: 1px solid var(--line);
+    text-align: left;
+}
+.md-body th { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+
+/* ---- on a card ---------------------------------------------------- */
+
+/* The rendered twin of .note-body: the same box, minus the caret. It is
+   clipped by sizeCard the way a checklist is, so the fade and the Expand
+   control below it work unchanged. */
+.note-md {
+    padding: .2rem 1rem .8rem;
+    font-size: .93rem;
+    line-height: 1.62;
+    overflow: hidden;
+    cursor: pointer;
+}
+.note-md a { cursor: pointer; }
+#panel-notes[data-note-view="small"] .note-md { padding: .35rem .8rem .72rem; font-size: .88rem; }
+#panel-notes[data-note-view="large"] .note-md { padding: .55rem 1.2rem 1.15rem; font-size: 1rem; }
+#panel-notes[data-note-view="xlarge"] .note-md {
+    padding: .6rem 1.5rem 1.4rem;
+    font-size: 1.05rem;
+    line-height: 1.7;
+}
+
+/* ---- in the focus view -------------------------------------------- */
+
+/* The rendered counterpart of .focus-body, and the same box: its own
+   scroll, the same measure, the same padding. Only the type changes —
+   this one is read, so it is set in the body face rather than in mono. */
+.focus-md {
+    flex: 1; min-height: 0;
+    width: 100%;
+    padding: 1.2rem 1.4rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    font-size: .95rem;
+    line-height: 1.7;
+}
+
+/* ---- the Plain text / Markdown switch ------------------------------ */
+
+.seg {
+    display: inline-flex; flex: none;
+    padding: 2px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+}
+.seg-btn {
+    padding: .3em .75em;
+    border: 0; border-radius: var(--r-pill);
+    background: none;
+    color: var(--ink-faint);
+    font-family: inherit;
+    font-size: .74rem; font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.seg-btn:hover { color: var(--ink); }
+.seg-btn.is-on {
+    background: var(--surface-over);
+    color: var(--accent);
+    box-shadow: var(--shadow-sm);
 }
 
 /* ============================================================
@@ -1543,6 +1742,7 @@ code {
     /* Wrapping is set once on .focus-body now, for every width — this
        block only tightens the spacing for a phone. */
     .focus-body { padding: 1rem; font-size: .84rem; }
+    .focus-md { padding: 1rem; font-size: .9rem; }
     /* Plain padding here sits under the iOS home indicator. */
     .focus-foot { padding: .6rem .8rem max(.6rem, env(safe-area-inset-bottom)); }
 
@@ -1562,6 +1762,12 @@ code {
     .brand h1 em { display: none; }   /* "Docket" alone still reads */
     .note-foot { padding-left: .7rem; }
     .focus-foot .btn-sm { padding: .35em .6em; }
+    /* The switch is what the title shares the head with, and on a narrow
+       phone one of the two has to give. The switch gives its padding
+       rather than its words: "Plain text" and "Markdown" are the whole
+       control, and an unlabelled pair of pills is a guess. */
+    .seg-btn { padding: .3em .5em; font-size: .7rem; }
+    .focus-head { padding-left: .7rem; gap: .35rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

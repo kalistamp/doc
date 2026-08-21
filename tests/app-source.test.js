@@ -290,10 +290,143 @@ test('the merge icon is plain geometry, coloured by nothing of its own', () => {
 test('the cache buster moved with the scripts and the sheet', () => {
     /* Pages serves this repo root; a returning visitor otherwise runs a
        stale app.js against the new markup. */
-    assert.doesNotMatch(html, /\?v=12/);
-    ['style.css', 'config.js', 'store.js', 'app.js'].forEach((asset) => {
-        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=13`), `${asset} is busted`);
+    assert.doesNotMatch(html, /\?v=13/);
+    ['style.css', 'config.js', 'store.js', 'markdown.js', 'app.js'].forEach((asset) => {
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=14`), `${asset} is busted`);
     });
+});
+
+test('markdown.js loads before the app that calls into it', () => {
+    /* app.js reads window.DocketMarkdown at the top of its IIFE, so the
+       order in the document is the whole of the contract between them. */
+    assert.ok(html.indexOf('markdown.js') < html.indexOf('app.js?v='),
+              'the renderer is defined first');
+    assert.match(app, /const MD = window\.DocketMarkdown/);
+});
+
+/* ---- Markdown preview -------------------------------------------------
+
+   A note that reads like Markdown is drawn rendered rather than as the
+   source you typed. What is asserted here is the wiring: that the two
+   surfaces agree on which notes those are, that the toggle is a note's
+   own answer and not a device's, and that switching one is treated as the
+   view change it is rather than as an edit. The renderer and the detector
+   themselves are exercised in markdown.test.js. */
+
+test('the rendered body replaces the textarea rather than sitting beside it', () => {
+    const card = app.match(/function noteCard\(n\) \{([\s\S]*?)\n    \}/);
+    assert.ok(card, 'noteCard exists');
+    assert.match(card[1], /const markdown = showsMarkdown\(n\)/);
+    assert.match(card[1], /markdown\s*\n?\s*\? `<div class="note-md md-body">\$\{markdownHtml\(n\)\}<\/div>`/);
+    /* Two bodies in one card would be two answers to `.note-body`, and
+       every keystroke handler on the panel reads the first it finds. */
+    assert.match(card[1], /: `\s*\n\s*<textarea class="note-body"/);
+});
+
+test('detection is asked once per note and re-asked when its text changes', () => {
+    /* renderNotes runs on every pin, search, delete and background sync,
+       and both detecting and rendering walk the whole body. */
+    const memo = app.match(/function markdownMemo\(n\) \{([\s\S]*?)\n    \}/);
+    assert.ok(memo, 'markdownMemo exists');
+    assert.match(memo[1], /entry\.body !== body/, 'a changed body invalidates it');
+    assert.match(app, /if \(entry\.looks === null\) entry\.looks = MD\.looksLikeMarkdown/);
+    assert.match(app, /if \(entry\.html === null\) entry\.html = MD\.render/);
+    assert.match(app, /pruneMarkdownMemo\(\)/, 'and dead entries are swept');
+});
+
+test('the note override is three-valued, so an old note still auto-detects', () => {
+    /* `false` has to mean "shown as plain text because you said so", which
+       leaves absent as the only spelling for "nobody has said". A boolean
+       would read every note written before this as a decision. */
+    const shows = app.match(/function showsMarkdown\(n\) \{([\s\S]*?)\n    \}/);
+    assert.ok(shows, 'showsMarkdown exists');
+    assert.match(shows[1], /if \(typeof n\.markdown === 'boolean'\) return n\.markdown/);
+    assert.match(shows[1], /isList\(n\)\) return false/, 'a checklist has no body to render');
+    assert.match(app, /markdown: null, markdownAt: null/, 'and a new note has said nothing');
+});
+
+test('switching a note between the two views is not an edit', () => {
+    const setter = app.match(/function setMarkdown\(note, on\) \{([\s\S]*?)\n    \}/);
+    assert.ok(setter, 'setMarkdown exists');
+    assert.match(setter[1], /note\.markdown = on/);
+    assert.match(setter[1], /note\.markdownAt = new Date\(\)\.toISOString\(\)/);
+    /* The same rule the pin follows: a note you merely re-drew must not
+       jump up a recently-updated sort, and a change that never bumps
+       `updated` needs a clock of its own to reach another device at all. */
+    assert.doesNotMatch(setter[1], /note\.updated =|touchNote\(/);
+    assert.match(app, /String\(item\.markdown\)\]\.join\('~'\)/,
+                 'and the fingerprint notices one arriving from elsewhere');
+});
+
+test('both the card and the focus view carry the switch', () => {
+    assert.match(app, /class="note-act act-md\$\{markdown \? ' is-on' : ''\}/);
+    assert.match(html, /id="focus-mode" class="seg"/);
+    assert.match(html, /data-mode="text"/);
+    assert.match(html, /data-mode="markdown"/);
+    assert.match(html, /<div id="focus-md" class="focus-md md-body"/);
+    /* A checklist has neither a body nor anything to preview. */
+    assert.match(app, /\$\{isList\(n\) \? '' : `<button class="note-act act-md/);
+    assert.match(app, /el\('focus-mode'\)\.hidden = list/);
+});
+
+test('a rendered card opens the note rather than swallowing the click', () => {
+    const handler = app.match(/el\('panel-notes'\)\.addEventListener\('click', \(e\) => \{([\s\S]*?)\n    \}\);/);
+    assert.ok(handler, 'the notes click handler exists');
+    assert.match(handler[1], /act-md'\)\) \{[\s\S]*?setMarkdown\(note, !showsMarkdown\(note\)\)/);
+    assert.match(handler[1], /note-md'\)\) \{[\s\S]*?if \(!e\.target\.closest\('a'\)\) openFocus\(note\.id\)/,
+                 'a link inside the note is followed, not intercepted');
+    /* And picking notes for a merge still comes first, or reaching for a
+       rendered card would open it instead of picking it. */
+    assert.ok(handler[1].indexOf('if (merging)') < handler[1].indexOf('act-md'));
+});
+
+test('the focus view has one place that decides which surface is showing', () => {
+    const render = app.match(/function renderFocusBody\(note\) \{([\s\S]*?)\n    \}/);
+    assert.ok(render, 'renderFocusBody exists');
+    ['focus-body', 'focus-md', 'focus-items', 'focus-mode'].forEach((id) => {
+        assert.ok(render[1].includes(`el('${id}').hidden`), `${id} is set here`);
+    });
+    assert.match(app, /function openFocus\(id\) \{[\s\S]*?renderFocusBody\(note\)/);
+    /* The word count reads the note, because the textarea is empty while
+       the preview is up. */
+    const meta = app.match(/function updateFocusMeta\(\) \{([\s\S]*?)\n    \}/);
+    assert.match(meta[1], /const body = note\.body \|\| ''/);
+});
+
+test('a rendered body is clamped and expanded like any other long note', () => {
+    const sizeCard = app.match(/function sizeCard\(card\) \{([\s\S]*?)\n    \}/);
+    assert.ok(sizeCard, 'sizeCard exists');
+    /* A <div> grows on its own, so it is capped the way a checklist is
+       rather than measured the way a textarea has to be. */
+    assert.match(sizeCard[1], /querySelector\('\.check-wrap, \.note-md'\)/);
+    assert.match(css, /\.note\.is-clamped \.note-fade \{ opacity: 1; \}/);
+});
+
+test('the tags the renderer emits are styled once, for both places it draws', () => {
+    ['h1', 'h2', 'blockquote', 'pre', 'code', 'table', 'hr', 'img']
+        .forEach((tag) => {
+            assert.match(css, new RegExp(`\\.md-body ${tag}[ ,{]`), `${tag} is styled`);
+        });
+    /* A card is as wide as its column, so the two things that cannot wrap
+       scroll inside themselves instead of taking the board sideways. */
+    assert.match(css, /\.md-body pre \{[\s\S]*?overflow-x: auto/);
+    assert.match(css, /\.md-tablewrap \{[\s\S]*?overflow-x: auto/);
+    /* And nothing here names a colour of its own, or dark mode would need
+       a second copy of the whole block. */
+    const block = css.match(/MARKDOWN\r?\n[\s\S]*?\r?\n\/\* =+\r?\n   FILES/);
+    assert.ok(block, 'the markdown block exists');
+    assert.doesNotMatch(block[0], /#[0-9a-f]{3,6}\b/i);
+});
+
+test('the fourth footer control still fits the narrowest card', () => {
+    /* Small view is a 230px column, and its footer already carried a
+       folder, a stamp and three actions. The switch made it four, and the
+       stamp lost its line: "5 min ago" wrapped to three rows and every
+       card grew an inch. The row gives up spacing, not a control. */
+    assert.match(css, /#panel-notes\[data-note-view="small"\] \.note-act \{ width: 30px/);
+    assert.match(css, /#panel-notes\[data-note-view="small"\] \.note-foot \{[\s\S]*?gap: \.12rem/);
+    /* And nothing lets it wrap again, in any view. */
+    assert.match(css, /\.note-stamp \{[\s\S]*?white-space: nowrap; overflow: hidden; text-overflow: ellipsis;/);
 });
 
 /* A modal that dismisses on a backdrop click cannot decide that on the
