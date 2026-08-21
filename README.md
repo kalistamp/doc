@@ -101,10 +101,11 @@ is turned. That is what orders the band, and — because `updated` is what
 every merge compares — it is also the only reason a pin made on your phone
 is a pin on your laptop. See *Two machines at once*.
 
-**Finish Next.** A second band, above Pinned, on the bomb button beside the
-pin. Pinning is for what you want kept in reach; Finish Next is for what you
-mean to get done, and the two answer different questions often enough to be
-worth separate bands. It works the same way in every respect — its own band,
+**Finish Next.** A second band, above Pinned, on the flag button beside the
+pin — outline while the note is not flagged, solid once it is. Pinning is for
+what you want kept in reach; Finish Next is for what you mean to get done,
+and the two answer different questions often enough to be worth separate
+bands. It works the same way in every respect — its own band,
 newest mark first, its own date in `finishNextAt`, and the same deliberate
 refusal to touch the updated stamp.
 

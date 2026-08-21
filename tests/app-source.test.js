@@ -159,15 +159,31 @@ test('a note wearing both flags is drawn once, in the higher band', () => {
         /if \(note\.finishNext\) finish\+\+;\s+else if \(note\.pinned\) pinned\+\+;\s+else rest\+\+;/);
 });
 
-test('the bomb icon is plain geometry, coloured by nothing of its own', () => {
-    const symbol = html.match(/<symbol id="i-bomb"[\s\S]*?<\/symbol>/);
-    assert.ok(symbol, 'the sprite carries a bomb');
+test('the Finish Next flag is plain geometry, coloured by nothing of its own', () => {
+    const symbol = html.match(/<symbol id="i-flag"[\s\S]*?<\/symbol>/);
+    assert.ok(symbol, 'the sprite carries a flag');
     assert.match(symbol[0], /viewBox="0 0 24 24"/, 'on the same grid as every other icon');
     /* .ico supplies fill:none and stroke:currentColor once for the whole
        sprite. A symbol carrying its own would be the one icon that ignored
-       the theme. */
+       the theme — and the raised flag below fills from CSS for the same
+       reason, so the geometry has to stay unpainted. */
     assert.doesNotMatch(symbol[0], /fill=|stroke=|style=/);
-    assert.match(html, /<use href="#i-bomb">/, 'and it is what the band and the button show');
+    assert.match(html, /<use href="#i-flag">/, 'the band shows it');
+    assert.match(app, /act-finish\$\{n\.finishNext \? ' is-on' : ''\}/);
+    assert.match(app, /<use href="#i-flag">/, 'and so does the button');
+    /* Nothing should still be reaching for the icon this replaced. */
+    assert.doesNotMatch(html + app, /i-bomb/);
+});
+
+test('a raised flag is solid, and the pin it sits beside is not', () => {
+    /* Both controls light up in the same accent, so when a note wears both
+       the colour says nothing about which is which. The flag has a second
+       shape to give and the pin does not, which is the whole reason only
+       one of them fills. */
+    assert.match(css, /\.note-act\.act-finish\.is-on \.ico \{ fill: currentColor; \}/);
+    assert.doesNotMatch(css, /\.act-pin\.is-on \.ico \{ fill/);
+    assert.match(css, /#finish-wrap \.band-title \.ico \{ fill: currentColor; \}/,
+                 'and the band wears it raised too');
 });
 
 test('deleting a note asks before it acts, and does not also offer Undo', () => {
@@ -290,9 +306,9 @@ test('the merge icon is plain geometry, coloured by nothing of its own', () => {
 test('the cache buster moved with the scripts and the sheet', () => {
     /* Pages serves this repo root; a returning visitor otherwise runs a
        stale app.js against the new markup. */
-    assert.doesNotMatch(html, /\?v=13/);
+    assert.doesNotMatch(html, /\?v=14/);
     ['style.css', 'config.js', 'store.js', 'markdown.js', 'app.js'].forEach((asset) => {
-        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=14`), `${asset} is busted`);
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=15`), `${asset} is busted`);
     });
 });
 

@@ -896,7 +896,7 @@
                             title="${n.finishNext ? 'Remove from Finish Next' : 'Finish next'}"
                             aria-pressed="${n.finishNext ? 'true' : 'false'}"
                             aria-label="${n.finishNext ? 'Remove note from Finish Next' : 'Mark note to finish next'}">
-                        <svg class="ico"><use href="#i-bomb"></use></svg>
+                        <svg class="ico"><use href="#i-flag"></use></svg>
                     </button>
                     <button class="note-act act-pin${n.pinned ? ' is-on' : ''}" type="button"
                             title="${n.pinned ? 'Unpin' : 'Pin to top'}"

@@ -972,10 +972,17 @@ a { color: var(--accent); }
 }
 .note-act:hover { background: var(--bg-tint); color: var(--ink); }
 /* Finish Next and the pin are independent, so both controls can be lit at
-   once on the same note. One rule serves both: they are told apart by
-   their icons, and a second accent colour would read as a second kind of
-   state rather than as the same one on a different switch. */
+   once on the same note. One accent serves both: a second colour would read
+   as a second kind of state rather than as the same one on a different
+   switch. */
 .note-act.is-on { color: var(--accent); }
+
+/* What tells the two apart when both are lit is the shape, not the colour,
+   and a flag has a second shape to give. Outline while the note is not
+   flagged, solid once it is — the way every flag anyone has raised works.
+   The pin keeps colour alone: a pushpin has no filled form to switch to,
+   and inventing one would be a mark rather than a pin. */
+.note-act.act-finish.is-on .ico { fill: currentColor; }
 .note-act.act-del:hover { background: var(--danger-wash); color: var(--danger); }
 .note-act.is-working { color: var(--accent); pointer-events: none; }
 .note-act.is-working .ico { animation: spin 1s linear infinite; }
@@ -991,6 +998,9 @@ a { color: var(--accent); }
     color: var(--ink-faint);
 }
 .band-title .ico { width: .95em; height: .95em; color: var(--accent); }
+/* The band is the flagged notes, so its flag is up like theirs. At this
+   size an outline is mostly the hole in the middle of it. */
+#finish-wrap .band-title .ico { fill: currentColor; }
 #others-title { margin-top: 1.6rem; }
 
 /* Pinned is the second band, and only needs the gap above it when the
