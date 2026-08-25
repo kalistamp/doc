@@ -306,9 +306,9 @@ test('the merge icon is plain geometry, coloured by nothing of its own', () => {
 test('the cache buster moved with the scripts and the sheet', () => {
     /* Pages serves this repo root; a returning visitor otherwise runs a
        stale app.js against the new markup. */
-    assert.doesNotMatch(html, /\?v=14/);
+    assert.doesNotMatch(html, /\?v=15/);
     ['style.css', 'config.js', 'store.js', 'markdown.js', 'app.js'].forEach((asset) => {
-        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=15`), `${asset} is busted`);
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=16`), `${asset} is busted`);
     });
 });
 

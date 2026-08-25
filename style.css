@@ -266,7 +266,7 @@ a { color: var(--accent); }
 :root.theme-dark .ico-moon { display: block; }
 
 /* ============================================================
-   PASSKEY GATE
+   SIGN-IN GATE
    ============================================================ */
 
 .gate {
@@ -309,22 +309,20 @@ a { color: var(--accent); }
 .gate-card h1 { font-size: 2rem; line-height: 1.15; }
 .gate-sub { margin: .5rem 0 1.8rem; color: var(--ink-soft); font-size: .93rem; }
 
-#passkey {
+#email-input,
+#password-input {
     width: 100%;
     padding: .85em 1em;
     margin-bottom: .8rem;
     background: var(--surface-2);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    text-align: center;
-    letter-spacing: .3em;
-    /* letter-spacing adds a trailing gap after the last character, which
-       drags centred text visibly left. Nudge back by half of it. */
-    text-indent: .3em;
     transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
-#passkey::placeholder { letter-spacing: normal; text-indent: 0; color: var(--ink-faint); }
-#passkey:focus {
+#email-input::placeholder,
+#password-input::placeholder { color: var(--ink-faint); }
+#email-input:focus,
+#password-input:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 4px var(--accent-wash);
@@ -1764,7 +1762,7 @@ code {
    carried by colour and spacing instead. */
 @media (max-width: 720px) {
     .field input, .search input, .note-title, .note-body, .check-text, .sort,
-    .focus-title, .focus-body, #passkey { font-size: 16px; }
+    .focus-title, .focus-body, #email-input, #password-input { font-size: 16px; }
     .note-body { line-height: 1.6; }
 }
 

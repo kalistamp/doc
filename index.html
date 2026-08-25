@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="A private docket for notes and files, synced across every machine through your own gist.">
+<meta name="description" content="A private docket for notes and files, synced securely with Supabase.">
 <title>Docket Sharing</title>
 
 <!-- Theme bootstrap. Runs before the stylesheet paints so a dark-mode
@@ -21,7 +21,7 @@
 })();
 </script>
 
-<link rel="stylesheet" href="./style.css?v=15">
+<link rel="stylesheet" href="./style.css?v=16">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
 </head>
 <body>
@@ -64,7 +64,7 @@
 </svg>
 
 <!-- ============================================================
-     PASSKEY GATE
+     SIGN-IN GATE
      ============================================================ -->
 <div id="gate" class="gate">
     <div class="gate-card">
@@ -74,11 +74,14 @@
         <h1>Docket <em>Sharing</em></h1>
         <p class="gate-sub">Your notes and files, on every machine.</p>
 
-        <form id="gate-form" autocomplete="off">
-            <label class="sr-only" for="passkey">Passkey</label>
-            <input type="password" id="passkey" placeholder="Passkey"
-                   autocomplete="current-password" spellcheck="false" autofocus>
-            <button type="submit" class="btn btn-primary btn-block" id="gate-btn">Unlock</button>
+        <form id="gate-form" autocomplete="on">
+            <label class="sr-only" for="email-input">Email</label>
+            <input type="email" id="email-input" placeholder="Email"
+                   autocomplete="username" spellcheck="false" autofocus required>
+            <label class="sr-only" for="password-input">Password</label>
+            <input type="password" id="password-input" placeholder="Password"
+                   autocomplete="current-password" required>
+            <button type="submit" class="btn btn-primary btn-block" id="gate-btn">Sign in</button>
         </form>
         <p id="gate-msg" class="gate-msg" role="status" aria-live="polite"></p>
     </div>
@@ -107,7 +110,7 @@
             <button id="settings-btn" class="icon-btn" type="button" title="Cloud sync settings" aria-label="Settings">
                 <svg class="ico"><use href="#i-gear"></use></svg>
             </button>
-            <button id="lock-btn" class="icon-btn" type="button" title="Lock" aria-label="Lock">
+            <button id="lock-btn" class="icon-btn" type="button" title="Sign out" aria-label="Sign out">
                 <svg class="ico"><use href="#i-signout"></use></svg>
             </button>
         </div>
@@ -122,14 +125,12 @@
         </button>
     </div>
 
-    <!-- Shown until a token + gist id are saved. Notes still work and are
-         kept on this device; the gist is what carries them elsewhere. -->
+    <!-- Defensive fallback; authentication normally keeps this hidden. -->
     <div id="connect-card" class="connect-card" hidden>
         <svg class="ico ico-lg"><use href="#i-cloud-off"></use></svg>
         <div class="connect-main">
             <h3>Not syncing yet</h3>
-            <p>Notes are saved on this device only. Add your own GitHub token and
-               gist id to carry them to your other machines.</p>
+            <p>Sign in to synchronize notes and files through Supabase.</p>
         </div>
         <button class="btn btn-primary" type="button" data-act="settings">Connect</button>
     </div>
@@ -288,7 +289,7 @@
     </main>
 
     <footer class="foot">
-        <span>Your gist, your token · <span id="foot-stamp">not connected</span></span>
+        <span>Private Supabase sync · <span id="foot-stamp">not connected</span></span>
     </footer>
 </div>
 
@@ -331,31 +332,14 @@
      MODALS
      ============================================================ -->
 <div id="settings-modal" class="modal" hidden>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Cloud sync settings">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Docket settings">
         <h2>Cloud sync</h2>
-        <p class="modal-lede">Docket keeps nothing of its own. Point it at a gist you
-           own and it becomes yours — on this device and any other you enter these on.</p>
-
-        <div class="field">
-            <label for="token-input">GitHub token</label>
-            <input type="password" id="token-input" placeholder="ghp_… or github_pat_…"
-                   spellcheck="false" autocomplete="off">
-            <p class="hint">Needs <strong>Gists → Read and write</strong> and nothing else.
-               <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">Create one ↗</a></p>
-        </div>
-
-        <div class="field">
-            <label for="gist-input">Gist ID</label>
-            <input type="text" id="gist-input" placeholder="Paste your Gist ID or URL"
-                   spellcheck="false" autocomplete="off">
-            <p class="hint">Make a secret gist with any placeholder content; Docket fills in
-               the rest. A full URL works — the id is pulled out of it.
-               <a href="https://gist.github.com/" target="_blank" rel="noopener">New gist ↗</a></p>
-        </div>
+        <p class="modal-lede">Your docket is synchronized through the isolated
+           <code>doc</code> schema in the shared Supabase project.</p>
 
         <dl class="facts">
             <dt>Status</dt><dd id="fact-status">—</dd>
-            <dt>Token</dt><dd id="fact-token">—</dd>
+            <dt>Account</dt><dd id="fact-account">—</dd>
             <dt>Notes</dt><dd id="fact-notes">—</dd>
             <dt>Files</dt><dd id="fact-files">—</dd>
         </dl>
@@ -383,11 +367,11 @@
                 <svg class="ico"><use href="#i-clock"></use></svg> Version history
             </button>
         </div>
-        <p class="hint hint-block">Editing checkpoints are kept as gist revisions. You can
+        <p class="hint hint-block">Editing checkpoints are kept as Supabase revisions. You can
            look back through them and restore one.</p>
 
-        <p class="hint hint-block">Your token and gist id stay in this browser's
-           localStorage and are never committed or sent anywhere but GitHub.</p>
+        <p class="hint hint-block">Row Level Security restricts documents, drafts,
+           revisions, and file contents to the signed-in account.</p>
 
         <div class="modal-actions">
             <button id="reload-btn" class="btn btn-ghost btn-sm" type="button">
@@ -395,7 +379,7 @@
             </button>
             <span class="spacer"></span>
             <button id="settings-cancel" class="btn btn-ghost" type="button">Cancel</button>
-            <button id="settings-save" class="btn btn-primary" type="button">Save</button>
+            <button id="settings-save" class="btn btn-primary" type="button">Done</button>
         </div>
     </div>
 </div>
@@ -467,9 +451,10 @@
     </button>
 </div>
 
-<script src="./config.js?v=15"></script>
-<script src="./store.js?v=15"></script>
-<script src="./markdown.js?v=15"></script>
-<script src="./app.js?v=15"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="./config.js?v=16"></script>
+<script src="./store.js?v=16"></script>
+<script src="./markdown.js?v=16"></script>
+<script src="./app.js?v=16"></script>
 </body>
 </html>

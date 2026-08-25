@@ -1,0 +1,58 @@
+name: deploy-pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: |
+          node --check config.js
+          node --check store.js
+          node --check markdown.js
+          node --check app.js
+          for test_file in tests/*.test.js; do node "$test_file"; done
+
+      - name: Build Pages artifact
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required" >&2
+            exit 1
+          fi
+          mkdir _site
+          cp index.html style.css config.js store.js markdown.js app.js .nojekyll _site/
+          sed -i "s|PUT_YOUR_SUPABASE_URL_HERE|$SUPABASE_URL|" _site/config.js
+          sed -i "s|PUT_YOUR_PUBLISHABLE_KEY_HERE|$SUPABASE_PUBLISHABLE_KEY|" _site/config.js
+          if grep -q 'PUT_YOUR_' _site/config.js; then
+            echo "Supabase configuration substitution failed" >&2
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

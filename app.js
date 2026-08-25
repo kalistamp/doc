@@ -1,7 +1,7 @@
 /* ============================================================
    DOCKET SHARING — app
 
-   State is four collections, all of them in the gist:
+   State is four collections stored in the `doc` Supabase schema:
      notes    [{ id, kind, title, body|items, pinned, pinnedAt,
                  finishNext, finishNextAt, folder, created, updated }]
      files    [{ id, name, size, type, folder, added }]   ← metadata only
@@ -29,9 +29,8 @@
    A folder is only a label: `folder` holds its id, so deleting a folder
    never deletes what was in it.
 
-   All four are cached in localStorage so the app works before a gist is
-   connected. File *bytes* never sit in either store: they live
-   one-per-file in the gist and are fetched only when downloaded.
+   All four are cached in localStorage for fast startup. File bytes live
+   separately in Supabase and are fetched only when downloaded.
    ============================================================ */
 
 (function () {
@@ -240,7 +239,7 @@
             localStorage.setItem(LS.files, JSON.stringify(files));
             localStorage.setItem(LS.folders, JSON.stringify(folders));
             localStorage.setItem(LS.trash, JSON.stringify(trash));
-        } catch (e) { /* quota or private mode — the gist is the real home */ }
+        } catch (e) { /* quota or private mode — Supabase is the real home */ }
     }
 
     function readCache() {
@@ -274,24 +273,11 @@
     }
 
     /* ============================================================
-       PASSKEY GATE
+       SUPABASE SIGN-IN
        ============================================================ */
 
-    el('gate-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const card = $('.gate-card');
-        const msg = el('gate-msg');
-
-        if (el('passkey').value !== CFG.PASSKEY) {
-            msg.className = 'gate-msg';
-            msg.textContent = "That passkey didn't work.";
-            card.classList.remove('is-wrong');
-            void card.offsetWidth;              /* restart the shake */
-            card.classList.add('is-wrong');
-            el('passkey').select();
-            return;
-        }
-
+    async function openDocket() {
+        if (unlocked) return;
         el('gate').classList.add('is-gone');
         el('app').hidden = false;
         unlocked = true;
@@ -301,24 +287,58 @@
             version: 4, updated: new Date().toISOString()
         }), adoptRemote);
 
-        /* Show the cached copy immediately, then reconcile with the gist.
-           Opening straight into your notes beats a spinner. */
         readCache();
         purgeTrash();
         renderAll();
         lastPull = Date.now();
-        await pullFromGist();
+        await pullFromCloud();
         reflectConnection();
+    }
+
+    el('gate-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const card = $('.gate-card');
+        const msg = el('gate-msg');
+        const button = el('gate-btn');
+        msg.textContent = '';
+        button.disabled = true;
+        button.textContent = 'Signing in…';
+        const result = await Store.signIn(
+            el('email-input').value.trim(), el('password-input').value
+        );
+        if (!result.ok) {
+            msg.className = 'gate-msg';
+            msg.textContent = result.error;
+            card.classList.remove('is-wrong');
+            void card.offsetWidth;
+            card.classList.add('is-wrong');
+            el('password-input').select();
+            button.disabled = false;
+            button.textContent = 'Sign in';
+            return;
+        }
+        el('password-input').value = '';
+        await openDocket();
     });
 
     el('lock-btn').addEventListener('click', async () => {
         Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
+        await Store.signOut();
+        [LS.notes, LS.files, LS.folders, LS.trash].forEach((key) => {
+            try { localStorage.removeItem(key); } catch (e) {}
+        });
         location.reload();
     });
 
+    Store.getSession().then((session) => {
+        if (session) openDocket();
+    }).catch((error) => {
+        el('gate-msg').textContent = error.message;
+    });
+
     /**
-     * Pull the gist and reconcile it with what is here.
+     * Pull Supabase and reconcile it with what is here.
      *
      * This used to replace local state outright, on the grounds that
      * replacing is how a delete made on another machine lands. It is also
@@ -327,7 +347,7 @@
      * note you are typing into. Deletes now travel as `trash` tombstones,
      * so a merge propagates them just as faithfully and keeps the rest.
      */
-    async function pullFromGist() {
+    async function pullFromCloud() {
         try {
             const data = await Store.load();
             if (!data) return;              /* not connected */
@@ -449,7 +469,7 @@
         el('connect-card').hidden = on;
         el('dropzone-hint').textContent = on
             ? `Up to ${formatBytes(CFG.MAX_FILE_BYTES)} each · ${CFG.MAX_FILES} files`
-            : 'Connect a gist under Settings to store files';
+            : 'Sign in to store files';
         el('dropzone').classList.toggle('is-disabled', !on);
         if (!on) el('foot-stamp').textContent = 'not connected';
     }
@@ -498,7 +518,7 @@
     let lastPull = 0;
     let pulling = null;
 
-    /** Re-read the gist, at most once per POLL_MS unless forced. Returns
+    /** Re-read Supabase, at most once per POLL_MS unless forced. Returns
      *  the in-flight pull if one is already running, so a burst of focus
      *  and visibility events makes one request between them. */
     function refresh(force) {
@@ -506,7 +526,7 @@
         if (pulling) return pulling;
         if (!force && Date.now() - lastPull < CFG.POLL_MS) return Promise.resolve();
         lastPull = Date.now();
-        pulling = pullFromGist().finally(() => { pulling = null; });
+        pulling = pullFromCloud().finally(() => { pulling = null; });
         return pulling;
     }
 
@@ -1500,7 +1520,7 @@
         renderAll();
         commit();
 
-        /* The blob stays in the gist while a file is only trashed — there
+        /* The blob stays in Supabase while a file is only trashed — there
            would be nothing to restore otherwise. Emptying the trash is
            what actually deletes it. */
         if (kind === 'note') { toast(`Note “${label}” moved to trash`); return; }
@@ -1546,7 +1566,7 @@
     }
 
     /* Anything sitting in the trash past TRASH_DAYS goes on the next load.
-       Files take their gist blob with them, which is the only point at
+       Files take their cloud blob with them, which is the only point at
        which storage is actually reclaimed — and it is where a tombstone is
        finally dropped too, every browser having long since seen it. */
     function purgeTrash() {
@@ -1844,11 +1864,9 @@
         const incoming = Array.from(fileList || []);
         if (!incoming.length) return;
 
-        /* Bytes live in the gist, not on this device — there is nowhere
-           to put them until a gist is connected. */
+        /* Bytes live in Supabase, not on this device. */
         if (!Store.isConnected()) {
-            toast('Connect a gist under Settings to store files');
-            openSettings();
+            toast('Sign in to store files');
             return;
         }
 
@@ -1859,7 +1877,7 @@
                 continue;
             }
             if (files.length >= CFG.MAX_FILES) {
-                toast(`A gist holds ${CFG.MAX_FILES} files; delete something first`);
+                toast(`The file limit is ${CFG.MAX_FILES}; delete something first`);
                 break;
             }
 
@@ -1954,7 +1972,7 @@
             </li>`).join('');
 
         el('file-note').textContent = files.length
-            ? `${files.length} of ${CFG.MAX_FILES} files · ${formatBytes(totalBytes())} stored in your gist`
+            ? `${files.length} of ${CFG.MAX_FILES} files · ${formatBytes(totalBytes())} stored in Supabase`
             : '';
         applyFileFilters();
     }
@@ -2004,7 +2022,7 @@
         btn.classList.add('is-working');
         try {
             const payload = await Store.getBlob(meta.id);
-            if (!payload) { toast('That file has no contents in the gist yet'); return; }
+            if (!payload) { toast('That file has no contents in Supabase yet'); return; }
 
             if (btn.classList.contains('act-get')) {
                 saveBlob(base64ToBlob(payload, meta.type), meta.name);
@@ -2089,7 +2107,7 @@
         el('settings-modal').hidden = true;
         confirmAction('Import this backup?',
             `It holds ${doc.notes.length} notes and ${(doc.files || []).length} files, and will replace what is here now. ` +
-            'Your file uploads stay in the gist either way.',
+            'Your existing file uploads stay in Supabase either way.',
             () => {
                 notes = doc.notes;
                 files = Array.isArray(doc.files) ? doc.files : [];
@@ -2107,7 +2125,7 @@
        ============================================================ */
 
     el('history-btn').addEventListener('click', async () => {
-        if (!Store.isConnected()) { toast('Connect a gist first — history lives in it'); return; }
+        if (!Store.isConnected()) { toast('Sign in first — history is stored in Supabase'); return; }
         el('settings-modal').hidden = true;
         el('history-list').innerHTML = '<li class="hint">Loading…</li>';
         el('history-modal').hidden = false;
@@ -2116,7 +2134,7 @@
            refresh history so it includes that semantic checkpoint. */
         Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
-        await pullFromGist();
+        await pullFromCloud();
         const revs = Store.history();
 
         el('history-list').innerHTML = revs.length ? revs.map((r, i) => `
@@ -2239,11 +2257,8 @@
        ============================================================ */
 
     function openSettings() {
-        const { token, gistId } = Store.credentials();
-        el('token-input').value = token;
-        el('gist-input').value = gistId;
         el('fact-status').textContent = Store.isConnected() ? 'connected' : 'not connected';
-        el('fact-token').textContent = Store.tokenHint();
+        el('fact-account').textContent = Store.currentEmail() || '—';
         el('fact-notes').textContent = `${notes.length} saved`;
         el('fact-files').textContent = `${files.length} · ${formatBytes(totalBytes())}`;
         el('settings-modal').hidden = false;
@@ -2256,33 +2271,14 @@
     el('settings-cancel').addEventListener('click', () => { el('settings-modal').hidden = true; });
 
     el('settings-save').addEventListener('click', async () => {
-        const wasConnected = Store.isConnected();
-        /* Finish against the old gist before disconnecting or switching it. */
-        if (wasConnected) {
-            Store.checkpoint();
-            if (Store.hasPending()) await Store.flush();
-        }
-        Store.setCredentials(el('token-input').value, el('gist-input').value);
         el('settings-modal').hidden = true;
-        reflectConnection();
-
-        if (!Store.isConnected()) { toast('Cloud sync turned off'); return; }
-        toast('Connecting…');
-        /* A first connection has to merge before it pushes, or it replaces
-           an established remote docket with this device's local cache.
-           Every pull merges now, so this is simply the ordinary path. */
-        lastPull = Date.now();
-        await pullFromGist();
-        /* Push the merged result straight back, so whatever this device
-           had before connecting actually reaches the gist. */
-        if (notes.length || files.length) commit();
     });
 
     el('reload-btn').addEventListener('click', async () => {
         el('settings-modal').hidden = true;
         if (Store.hasPending()) await Store.flush();
-        await pullFromGist();
-        toast(Store.isConnected() ? 'Reloaded from gist' : 'Not connected');
+        await pullFromCloud();
+        toast(Store.isConnected() ? 'Reloaded from Supabase' : 'Not connected');
     });
 
     /* Escape closes whichever layer is on top. */
