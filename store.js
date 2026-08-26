@@ -8,6 +8,7 @@
     let userId = null;
     let userEmail = '';
     let remoteVersion = 0;
+    let hasLoadedDocument = false;
     let listeners = [];
     let sources = { data: null, adopt: null };
     let lastHistory = [];
@@ -81,6 +82,7 @@
         userId = null;
         userEmail = '';
         remoteVersion = 0;
+        hasLoadedDocument = false;
         if (c) await c.auth.signOut();
     }
 
@@ -194,13 +196,20 @@
         sources.adopt = adopt || null;
     }
 
+    async function readVersion() {
+        const c = client();
+        const id = await requireUser();
+        const { data, error } = await c.from('documents').select('version')
+            .eq('user_id', id).maybeSingle();
+        if (error) throw new Error(error.message);
+        return Number(data && data.version || 0);
+    }
+
     async function readDocument(includeDrafts) {
         const c = client();
         const id = await requireUser();
         const requests = [
-            c.from('documents').select('data,version').eq('user_id', id).maybeSingle(),
-            c.from('revisions').select('id,created_at').eq('user_id', id)
-                .order('created_at', { ascending: false }).limit(200)
+            c.from('documents').select('data,version').eq('user_id', id).maybeSingle()
         ];
         if (includeDrafts) {
             requests.push(c.from('drafts').select('note_id,client_id,note,saved_at')
@@ -210,10 +219,10 @@
         results.forEach((result) => { if (result.error) throw new Error(result.error.message); });
         const row = results[0].data;
         remoteVersion = Number(row && row.version || 0);
-        lastHistory = results[1].data || [];
+        hasLoadedDocument = true;
         let docket = normalise(row && row.data);
         if (includeDrafts) {
-            loadedDrafts = results[2].data || [];
+            loadedDrafts = results[1].data || [];
             docket = overlayDrafts(docket, loadedDrafts);
         }
         return docket;
@@ -223,6 +232,10 @@
         if (!isConnected()) { emit('offline'); return null; }
         emit('loading');
         try {
+            if (hasLoadedDocument && await readVersion() === remoteVersion) {
+                emit('synced');
+                return null;
+            }
             const data = await readDocument(true);
             emit('synced');
             return data;
@@ -337,6 +350,7 @@
     async function reconcile() {
         if (!sources.adopt || !sources.data) return;
         const previous = remoteVersion;
+        if (await readVersion() === previous) return;
         const remote = await readDocument(false);
         if (remoteVersion !== previous) sources.adopt(mergeDocket(remote, sources.data()));
     }
@@ -442,6 +456,17 @@
         sha: String(row.id), at: row.created_at, added: null, removed: null
     }));
 
+    async function refreshHistory() {
+        const c = client();
+        const uid = await requireUser();
+        const { data, error } = await c.from('revisions').select('id,created_at')
+            .eq('user_id', uid).order('created_at', { ascending: false })
+            .limit(CFG.HISTORY_LIMIT);
+        if (error) throw new Error(error.message);
+        lastHistory = data || [];
+        return history();
+    }
+
     async function atVersion(id) {
         const c = client();
         const uid = await requireUser();
@@ -453,7 +478,7 @@
 
     window.DocketStore = {
         load, bind, touchData, touchNote, checkpoint, foldLoadedHot, flush,
-        history, atVersion, getBlob, putBlob, dropBlob, merge: mergeDocket,
+        history, refreshHistory, atVersion, getBlob, putBlob, dropBlob, merge: mergeDocket,
         retry: () => { lastError = null; retryDelay = 0; clearTimeout(retryTimer); flush(); },
         onStatus: (fn) => listeners.push(fn),
         hasPending,

@@ -350,7 +350,7 @@
     async function pullFromCloud() {
         try {
             const data = await Store.load();
-            if (!data) return;              /* not connected */
+            if (!data) return;              /* not connected or unchanged */
             adoptRemote(Store.merge(data, { notes, files, folders, trash }));
             purgeTrash();
             /* Any hot file recovered above is now represented in `notes`.
@@ -509,8 +509,8 @@
     window.addEventListener('focus', () => refresh());
 
     /* Two browsers side by side on one screen are never hidden and never
-       blurred, so neither of the above ever fires. A quiet poll is what
-       makes them converge; unchanged costs a 304 with no body. */
+       blurred, so neither of the above ever fires. The quiet poll checks
+       only the document version; a change triggers the full load above. */
     setInterval(() => {
         if (document.visibilityState === 'visible') refresh();
     }, CFG.POLL_MS);
@@ -2135,7 +2135,14 @@
         Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
         await pullFromCloud();
-        const revs = Store.history();
+        let revs;
+        try {
+            revs = await Store.refreshHistory();
+        } catch (error) {
+            el('history-list').innerHTML = '<li class="hint">History is unavailable.</li>';
+            showBanner(error.message);
+            return;
+        }
 
         el('history-list').innerHTML = revs.length ? revs.map((r, i) => `
             <li class="history-row" data-sha="${esc(r.sha)}">

@@ -37,10 +37,9 @@ window.DOCKET_CONFIG = {
     RETRY_BASE_MS: 2000,
     RETRY_MAX_MS: 60000,
 
-    /* How often a visible tab re-reads Supabase. A tab left open is a tab
-       holding a docket that goes stale the moment another browser writes,
-       and the pull is a conditional request: unchanged costs a 304 with
-       no body and no rate-limit charge. */
+    /* How often a visible tab checks Supabase for a newer document version.
+       The full docket, revision history, and drafts are fetched only after
+       this small version probe detects a change. */
     POLL_MS: 45000,
 
     /* A note taller than this collapses behind an expand control, so one
