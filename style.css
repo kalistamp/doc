@@ -117,6 +117,11 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+.icon-sprite {
+    position: absolute;
+    overflow: hidden;
+}
+
 /* The `hidden` attribute is how JS shows and hides the modals, the banner
    and the empty state. It only works because of this rule: `hidden` gets
    its display:none from the UA stylesheet, and ANY author `display:` beats

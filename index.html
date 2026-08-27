@@ -5,23 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="A private docket for notes and files, synced securely with Supabase.">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; connect-src 'self' https://baiojghilzxhkebfblzv.supabase.co wss://baiojghilzxhkebfblzv.supabase.co; form-action 'self'; frame-src 'none'; img-src 'self' data: https:; object-src 'none'; script-src 'self' 'sha384-yYibc5dYJpGrnfwduoaghaAxXjGPOZX6FnQX7L3+lFczEMOkA8pOAN2wLUbAxTsg' https://cdn.jsdelivr.net; style-src 'self'; upgrade-insecure-requests">
 <title>Docket Sharing</title>
 
 <!-- Theme bootstrap. Runs before the stylesheet paints so a dark-mode
      visitor never gets a white flash. app.js owns the toggle; this is a
      deliberate duplicate of just enough logic to beat first paint. -->
-<script>
-(function () {
-    try {
-        var saved = localStorage.getItem('docket.theme');
-        var dark = saved ? saved === 'dark'
-            : window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (dark) document.documentElement.classList.add('theme-dark');
-    } catch (e) {}
-})();
-</script>
+<script>(function(){try{const s=localStorage.getItem('docket.theme');const d=s?s==='dark':matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('theme-dark')}catch(_){}})();</script>
 
-<link rel="stylesheet" href="./style.css?v=17">
+<link rel="stylesheet" href="./style.css?v=19">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
 </head>
 <body>
@@ -30,7 +24,7 @@
      ICON SPRITE — inline so there is no icon-font CDN to wait on
      (and no flash of un-iconed buttons on a cold load).
      ============================================================ -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<svg class="icon-sprite" width="0" height="0" aria-hidden="true">
     <defs>
         <symbol id="i-lock" viewBox="0 0 24 24"><path d="M17 10V8a5 5 0 0 0-10 0v2M6 10h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/></symbol>
         <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM8 9h8M8 13h8M8 17h4"/></symbol>
@@ -367,11 +361,11 @@
                 <svg class="ico"><use href="#i-clock"></use></svg> Version history
             </button>
         </div>
-        <p class="hint hint-block">Editing checkpoints are kept as Supabase revisions. You can
-           look back through them and restore one.</p>
+            <p class="hint hint-block">Changed rows are kept as Supabase revisions. You can
+               look back through them and restore a complete point in time.</p>
 
-        <p class="hint hint-block">Row Level Security restricts documents, drafts,
-           revisions, and file contents to the signed-in account.</p>
+            <p class="hint hint-block">Row Level Security restricts docket rows, revisions,
+               and private Storage objects to the signed-in account.</p>
 
         <div class="modal-actions">
             <button id="reload-btn" class="btn btn-ghost btn-sm" type="button">
@@ -451,10 +445,12 @@
     </button>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="./config.js?v=17"></script>
-<script src="./store.js?v=17"></script>
-<script src="./markdown.js?v=17"></script>
-<script src="./app.js?v=17"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"
+        integrity="sha384-AkNSQdptcXlJ0/NBZc4qGk86cDVXcCevwoWgEKIpHOEfbvlXGLlIkimQtONt8KNf"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="./config.js?v=19"></script>
+<script src="./store.js?v=19"></script>
+<script src="./markdown.js?v=19"></script>
+<script src="./app.js?v=19"></script>
 </body>
 </html>

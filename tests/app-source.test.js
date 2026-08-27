@@ -28,6 +28,32 @@ test('the document has no render-blocking third-party font request', () => {
     assert.match(css, /--font-body:\s*system-ui/);
 });
 
+test('the document restricts network and script sources', () => {
+    assert.match(html, /http-equiv="Content-Security-Policy"/);
+    assert.match(html, /connect-src 'self' https:\/\/baiojghilzxhkebfblzv\.supabase\.co wss:\/\/baiojghilzxhkebfblzv\.supabase\.co/);
+    assert.match(html, /script-src 'self' 'sha384-[A-Za-z0-9+/=]+' https:\/\/cdn\.jsdelivr\.net/);
+    assert.doesNotMatch(html, /script-src[^;]*'unsafe-inline'/);
+    assert.match(html, /name="referrer" content="no-referrer"/);
+});
+
+test('the Supabase SDK is pinned and integrity checked', () => {
+    assert.match(html, /@supabase\/supabase-js@2\.57\.4\/dist\/umd\/supabase\.min\.js/);
+    assert.match(html, /integrity="sha384-AkNSQdptcXlJ0\/NBZc4qGk86cDVXcCevwoWgEKIpHOEfbvlXGLlIkimQtONt8KNf"/);
+    assert.doesNotMatch(html, /@supabase\/supabase-js@2["/]/);
+});
+
+test('the Supabase migration removes obsolete browser-stored GitHub credentials', () => {
+    assert.match(app, /\['docket\.token', 'docket\.gistId'\]\.forEach/);
+    assert.match(app, /localStorage\.removeItem\(key\)/);
+    assert.doesNotMatch(app, /localStorage\.setItem\(['"]docket\.token/);
+});
+
+test('revision history is loaded only when its dialog opens', () => {
+    const handler = app.match(/el\('history-btn'\)\.addEventListener\('click', async \(\) => \{([\s\S]*?)\n    \}\);/);
+    assert.ok(handler, 'history button handler exists');
+    assert.match(handler[1], /await Store\.loadHistory\(\)/);
+});
+
 test('new notes focus and smoothly reveal the exact created card', () => {
     assert.match(app, /revealNewNote\(note\.id\)/);
     assert.match(app, /candidate\.dataset\.id === String\(id\)/);
@@ -306,10 +332,29 @@ test('the merge icon is plain geometry, coloured by nothing of its own', () => {
 test('the cache buster moved with the scripts and the sheet', () => {
     /* Pages serves this repo root; a returning visitor otherwise runs a
        stale app.js against the new markup. */
-    assert.doesNotMatch(html, /\?v=16/);
+    assert.doesNotMatch(html, /\?v=18/);
     ['style.css', 'config.js', 'store.js', 'markdown.js', 'app.js'].forEach((asset) => {
-        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=17`), `${asset} is busted`);
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=19`), `${asset} is busted`);
     });
+});
+
+test('note keystrokes cache and queue only the edited note', () => {
+    const durable = app.match(/function durableNote\(note\) \{([\s\S]*?)\n    \}/);
+    assert.ok(durable);
+    assert.match(durable[1], /Store\.cacheItem\('note', note\)/);
+    assert.match(durable[1], /Store\.touchNote\(note\.id\)/);
+    assert.doesNotMatch(durable[1], /cache\(\)|JSON\.stringify/);
+});
+
+test('file bytes move directly between File or Blob objects and private Storage', () => {
+    assert.match(app, /await Store\.putBlob\(id, file\)/);
+    assert.match(app, /const blob = await Store\.getBlob\(meta\)/);
+    assert.doesNotMatch(app, /readAsDataURL|readBase64|base64ToBlob/);
+});
+
+test('cloud changes arrive through Realtime without a polling interval', () => {
+    assert.match(app, /Store\.subscribe\(\(revision\) => refresh\(true, revision\)\)/);
+    assert.doesNotMatch(app, /setInterval\(\(\) => \{\s*if \(document\.visibilityState === 'visible'\) refresh/);
 });
 
 test('markdown.js loads before the app that calls into it', () => {

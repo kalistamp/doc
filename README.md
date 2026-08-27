@@ -6,10 +6,15 @@ shared Supabase project.
 ## Architecture
 
 - Supabase Auth provides email/password sign-in.
-- `doc.documents` stores the current notes, folders, file metadata, and trash as JSONB.
-- `doc.drafts` protects active edits and supports crash recovery.
-- `doc.blobs` stores uploaded file content separately so app startup remains fast.
-- `doc.revisions` stores document checkpoints for version history.
+- `doc.docket_items` stores one note, folder, file-metadata record, or trash
+  tombstone per row; edits send only changed rows.
+- `doc.docket_item_versions` and `doc.docket_revision_events` provide delta
+  history without copying the whole docket on every save.
+- A private `doc-files-v2` Supabase Storage bucket holds file bytes.
+- `doc.docket_sync_state` drives filtered Realtime updates; there is no
+  background database polling loop.
+- IndexedDB caches individual records locally, so a keystroke persists only
+  the note being edited.
 - Row Level Security limits every record to its authenticated owner.
 
 The browser receives only the public Supabase URL and publishable key. The
@@ -36,7 +41,11 @@ node --check app.js
 for test_file in tests/*.test.js; do node "$test_file"; done
 ```
 
-One-time Gist export, Supabase SQL, import utilities, cleanup SQL, and the
-migration guide are intentionally kept outside this repository at:
+Shared Supabase migrations and deployment commands are intentionally kept
+outside this static repository at:
 
-`/home/ks/Documents/projects/backup_migration/doc/`
+`/home/ks/Documents/projects_audit/prelaunch_deployment/shared_supabase/`
+
+The v2 migration is additive. Legacy `documents`, `drafts`, `blobs`, and
+`revisions` tables remain available as rollback data until the upgraded site
+has been verified and legacy file migration has completed.

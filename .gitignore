@@ -1,6 +1,9 @@
-# The PAT lives outside this repo on purpose (see README → The token).
-# This is belt-and-braces in case one is ever dropped in here.
-token.txt
-*.token
 .DS_Store
 node_modules/
+# Legacy Gist credentials are no longer used, but keep accidental exports out
+# of Git history while older devices are being migrated.
+token.txt
+*.token
+*.local
+.env
+.env.*

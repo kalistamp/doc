@@ -8,7 +8,8 @@ window.SUPABASE_CONFIG = {
 /* Docket behavior and UI limits. */
 
 window.DOCKET_CONFIG = {
-    /* Conservative per-file ceiling for base64 content stored in Postgres. */
+    /* Private Storage bucket and conservative per-file ceiling. */
+    STORAGE_BUCKET: 'doc-files-v2',
     MAX_FILE_BYTES: 7 * 1024 * 1024,
 
     /* A guard against accidentally exhausting the shared free-tier database. */
@@ -21,26 +22,18 @@ window.DOCKET_CONFIG = {
        steady typing resets the debounce forever and nothing is saved. */
     MAX_SAVE_WAIT_MS: 5000,
 
-    /* A long-running editing session still gets a navigable checkpoint
-       after ten quiet minutes even if the note remains open. */
-    CHECKPOINT_IDLE_MS: 10 * 60 * 1000,
-
-    /* A hot file belongs to the browser writing it. Another browser may
-       only fold one it finds abandoned — comfortably longer than the
-       save clock above, so a browser that is merely between keystrokes
-       never looks abandoned to anyone else. */
-    HOT_STALE_MS: 2 * 60 * 1000,
-
     /* A failed save retries on its own, doubling from here to this
        ceiling. Without it a single dropped packet parked the docket on
        "Failed" until somebody noticed the banner. */
     RETRY_BASE_MS: 2000,
     RETRY_MAX_MS: 60000,
 
-    /* How often a visible tab checks Supabase for a newer document version.
-       The full docket, revision history, and drafts are fetched only after
-       this small version probe detects a change. */
-    POLL_MS: 45000,
+    /* Realtime handles active tabs. Focus events use this long throttle as
+       a reconnect safety net, without a background polling loop. */
+    REFRESH_THROTTLE_MS: 5 * 60 * 1000,
+
+    /* Legacy Postgres blobs migrate to Storage one at a time. */
+    BLOB_MIGRATION_PAUSE_MS: 1500,
 
     /* A note taller than this collapses behind an expand control, so one
        pasted file cannot push everything else off the screen. */

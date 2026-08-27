@@ -9,45 +9,57 @@ const source = fs.readFileSync(path.resolve(__dirname, '..', 'store.js'), 'utf8'
 function harness() {
     const calls = [];
     const rows = {
-        documents: { data: { notes: [{ id: 'n1', body: 'saved', updated: '2026-01-01' }],
-            files: [], folders: [], trash: [] }, version: 4 },
-        revisions: [{ id: 9, created_at: '2026-01-02T00:00:00Z' }],
-        drafts: [{ note_id: 'n1', client_id: 'old',
-            note: { id: 'n1', body: 'draft', updated: '2026-01-03' },
-            saved_at: '2026-01-03T00:00:00Z' }],
-        blobs: { content: 'YWJj' }
+        docket_sync_state: { revision: 4 },
+        docket_items: [
+            { entity_type: 'note', entity_id: 'n1', revision: 4,
+                data: { id: 'n1', body: 'saved', updated: '2026-01-01' } },
+            { entity_type: 'folder', entity_id: 'd1', revision: 4,
+                data: { id: 'd1', name: 'Work', created: '2026-01-01' } }
+        ],
+        docket_revision_events: [
+            { revision: 9, created_at: '2026-01-02T00:00:00Z', changed_count: 2 }
+        ],
+        blobs: null
     };
+    let delta = { revision: 5, changes: [{
+        entity_type: 'note', entity_id: 'n1', deleted: false, revision: 5,
+        data: { id: 'n1', body: 'changed elsewhere', updated: '2026-01-04' }
+    }] };
 
     class Query {
         constructor(table) { this.table = table; this.operation = 'select'; }
         select(columns) { this.operation = 'select'; this.columns = columns; return this; }
         eq() { return this; }
         order() { return this; }
-        limit(value) { this.rowLimit = value; return this; }
+        limit(value) { this.limitValue = value; return this; }
+        range(from, to) { this.from = from; this.to = to; return this; }
         maybeSingle() { this.singleRow = true; return this; }
-        single() { this.singleRow = true; return this; }
         delete() { this.operation = 'delete'; return this; }
-        upsert(value, options) {
-            this.operation = 'upsert';
-            calls.push({ operation: 'upsert', table: this.table, value, options });
-            return this;
-        }
         then(resolve, reject) {
-            if (this.operation === 'delete') calls.push({ operation: 'delete', table: this.table });
-            if (this.operation === 'select') {
-                const call = { operation: 'select', table: this.table, columns: this.columns };
-                if (this.rowLimit != null) call.limit = this.rowLimit;
-                calls.push(call);
-            }
+            calls.push({ operation: this.operation, table: this.table, columns: this.columns,
+                limit: this.limitValue, range: this.from == null ? null : [this.from, this.to] });
             let data = rows[this.table];
-            if (this.table === 'documents' && this.columns === 'version') {
-                data = data ? { version: data.version } : null;
-            }
+            if (this.from != null && Array.isArray(data)) data = data.slice(this.from, this.to + 1);
             if (this.singleRow && Array.isArray(data)) data = data[0] || null;
             return Promise.resolve({ data, error: null }).then(resolve, reject);
         }
     }
 
+    const storage = {
+        upload: async (filePath, blob, options) => {
+            calls.push({ operation: 'upload', path: filePath, blob, options });
+            return { data: { path: filePath }, error: null };
+        },
+        download: async (filePath) => {
+            calls.push({ operation: 'download', path: filePath });
+            return { data: { text: async () => 'hello' }, error: null };
+        },
+        remove: async (paths) => {
+            calls.push({ operation: 'remove', paths });
+            return { data: paths, error: null };
+        }
+    };
+    let subscribedHandler = null;
     let createArgs;
     const client = {
         auth: {
@@ -62,14 +74,33 @@ function harness() {
         from: (table) => new Query(table),
         rpc: async (name, args) => {
             calls.push({ operation: 'rpc', name, args });
-            return { data: 5, error: null };
-        }
+            if (name === 'read_docket_changes_since') return { data: delta, error: null };
+            if (name === 'read_docket_revision') {
+                return { data: { notes: [], files: [], folders: [], trash: [] }, error: null };
+            }
+            if (name === 'ensure_docket_state') return { data: 0, error: null };
+            if (name === 'apply_docket_changes') {
+                rows.docket_sync_state.revision++;
+                return { data: rows.docket_sync_state.revision, error: null };
+            }
+            return { data: null, error: null };
+        },
+        storage: { from: (bucket) => { calls.push({ operation: 'bucket', bucket }); return storage; } },
+        channel: (name) => ({
+            on(event, options, handler) {
+                calls.push({ operation: 'channel', name, event, options });
+                subscribedHandler = handler;
+                return this;
+            },
+            subscribe() { calls.push({ operation: 'subscribe', name }); return this; }
+        }),
+        removeChannel: async () => ({ error: null })
     };
     const window = {
         DOCKET_CONFIG: {
             SAVE_DEBOUNCE_MS: 900, MAX_SAVE_WAIT_MS: 5000,
-            CHECKPOINT_IDLE_MS: 600000, HOT_STALE_MS: 120000,
-            RETRY_BASE_MS: 2000, RETRY_MAX_MS: 60000, HISTORY_LIMIT: 40
+            RETRY_BASE_MS: 2000, RETRY_MAX_MS: 60000, HISTORY_LIMIT: 40,
+            STORAGE_BUCKET: 'doc-files-v2', BLOB_MIGRATION_PAUSE_MS: 0
         },
         SUPABASE_CONFIG: {
             url: 'https://example.supabase.co', publishableKey: 'public-key', schema: 'doc'
@@ -79,13 +110,18 @@ function harness() {
     const timers = new Map();
     let timerId = 0;
     const context = {
-        window, console, Date, Math, Map, Set, Promise,
+        window, console, Date, Math, Map, Set, Promise, JSON, Uint8Array,
         setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; },
         clearTimeout: (id) => timers.delete(id)
     };
     vm.createContext(context);
     vm.runInContext(source, context, { filename: 'store.js' });
-    return { Store: window.DocketStore, calls, rows, createArgs: () => createArgs };
+    return {
+        Store: window.DocketStore, calls, rows,
+        setDelta: (value) => { delta = value; },
+        emitRealtime: (revision) => subscribedHandler({ new: { revision } }),
+        createArgs: () => createArgs
+    };
 }
 
 test('Supabase client is scoped to the doc schema', async () => {
@@ -95,90 +131,98 @@ test('Supabase client is scoped to the doc schema', async () => {
     assert.equal(h.Store.currentEmail(), 'owner@example.com');
 });
 
-test('load overlays a newer crash-recovery draft', async () => {
+test('initial load reads normalized rows and never fetches the legacy JSONB document', async () => {
     const h = harness();
     await h.Store.getSession();
     const docket = await h.Store.load();
-    assert.equal(docket.notes[0].body, 'draft');
-    assert.equal(h.Store.history().length, 0);
-    const before = h.calls.length;
-    await h.Store.refreshHistory();
-    assert.equal(h.Store.history()[0].sha, '9');
-    assert.deepEqual(h.calls.slice(before), [{
-        operation: 'select', table: 'revisions', columns: 'id,created_at', limit: 40
-    }]);
+    assert.equal(docket.notes[0].body, 'saved');
+    assert.equal(docket.folders[0].name, 'Work');
+    assert.ok(h.calls.some((call) => call.table === 'docket_items'));
+    assert.equal(h.calls.some((call) => call.table === 'documents'), false);
 });
 
-test('unchanged reload reads only the document version', async () => {
+test('an unchanged safety refresh reads only the small sync state row', async () => {
     const h = harness();
     await h.Store.getSession();
     await h.Store.load();
     const before = h.calls.length;
-
-    const docket = await h.Store.load();
-
-    assert.equal(docket, null);
-    assert.deepEqual(h.calls.slice(before), [{
-        operation: 'select', table: 'documents', columns: 'version'
-    }]);
-});
-
-test('a newer version triggers the full document load', async () => {
-    const h = harness();
-    await h.Store.getSession();
-    await h.Store.load();
-    h.rows.documents.version = 5;
-    h.rows.documents.data.notes[0] = {
-        id: 'n1', body: 'changed elsewhere', updated: '2026-01-04'
-    };
-    const before = h.calls.length;
-
-    const docket = await h.Store.load();
-
-    assert.equal(docket.notes[0].body, 'changed elsewhere');
+    assert.equal(await h.Store.load(), null);
     assert.deepEqual(h.calls.slice(before).map(({ table, columns }) => ({ table, columns })), [
-        { table: 'documents', columns: 'version' },
-        { table: 'documents', columns: 'data,version' },
-        { table: 'drafts', columns: 'note_id,client_id,note,saved_at' }
+        { table: 'docket_sync_state', columns: 'revision' }
     ]);
 });
 
-test('archive writes use the version-checked save_document function', async () => {
+test('a Realtime revision fetches only item deltas', async () => {
     const h = harness();
     await h.Store.getSession();
-    let state = await h.Store.load();
-    h.Store.bind(() => state, (next) => { state = next; });
-    h.Store.touchData();
-    await h.Store.flush();
-    const call = h.calls.find((entry) => entry.operation === 'rpc');
-    assert.equal(call.name, 'save_document');
-    assert.equal(call.args.expected_version, 4);
-    assert.equal(call.args.new_data.notes[0].body, 'draft');
-});
-
-test('an unchanged save reconciliation reads only the version', async () => {
-    const h = harness();
-    await h.Store.getSession();
-    let state = await h.Store.load();
-    h.Store.bind(() => state, (next) => { state = next; });
-    h.Store.touchData();
+    await h.Store.load();
     const before = h.calls.length;
-
-    await h.Store.flush();
-
-    const reads = h.calls.slice(before).filter((entry) => entry.operation === 'select');
-    assert.deepEqual(reads, [{
-        operation: 'select', table: 'documents', columns: 'version'
-    }]);
+    const docket = await h.Store.load(5);
+    assert.equal(docket.notes[0].body, 'changed elsewhere');
+    assert.deepEqual(h.calls.slice(before).map((call) => call.name || call.table), [
+        'read_docket_changes_since'
+    ]);
 });
 
-test('file content is upserted separately from docket metadata', async () => {
+test('typing saves one note row rather than the complete docket', async () => {
     const h = harness();
     await h.Store.getSession();
-    h.Store.putBlob('file-1', 'YWJj');
+    let state = await h.Store.load();
+    h.Store.bind(() => state, (next) => { state = next; });
+    state.notes[0].body = 'one edited note';
+    state.notes[0].updated = '2026-01-05';
+    h.Store.touchNote('n1');
     await h.Store.flush();
-    const call = h.calls.find((entry) => entry.operation === 'upsert' && entry.table === 'blobs');
-    assert.equal(call.value.user_id, 'user-1');
-    assert.equal(call.value.file_id, 'file-1');
-    assert.equal(call.value.content, 'YWJj');
+    const call = h.calls.find((entry) => entry.name === 'apply_docket_changes');
+    assert.equal(call.args.changes.length, 1);
+    assert.equal(call.args.changes[0].entity_type, 'note');
+    assert.equal(call.args.changes[0].data.body, 'one edited note');
+    assert.equal('new_data' in call.args, false);
+});
+
+test('structural changes send row upserts and deletes only', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    let state = await h.Store.load();
+    h.Store.bind(() => state, (next) => { state = next; });
+    state.folders = [];
+    h.Store.touchData();
+    await h.Store.flush();
+    const call = h.calls.find((entry) => entry.name === 'apply_docket_changes');
+    assert.deepEqual(JSON.parse(JSON.stringify(call.args.changes.map(
+        ({ entity_type, entity_id, action }) => ({ entity_type, entity_id, action })))), [
+        { entity_type: 'folder', entity_id: 'd1', action: 'delete' }
+    ]);
+});
+
+test('revision history is lazy, bounded, and backed by delta events', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    await h.Store.loadHistory();
+    assert.equal(h.Store.history()[0].sha, '9');
+    const call = h.calls.find((entry) => entry.table === 'docket_revision_events');
+    assert.equal(call.limit, 40);
+});
+
+test('new file bytes upload to private Storage rather than Postgres', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    const blob = { type: 'text/plain' };
+    const filePath = await h.Store.putBlob('file-1', blob);
+    assert.equal(filePath, 'user-1/file-1');
+    assert.ok(h.calls.some((call) => call.operation === 'upload' && call.blob === blob));
+    assert.equal(h.calls.some((call) => call.table === 'blobs' && call.operation !== 'select'), false);
+});
+
+test('Realtime subscribes to the owner sync row and ignores the current revision', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    await h.Store.load();
+    const revisions = [];
+    h.Store.subscribe((revision) => revisions.push(revision));
+    h.emitRealtime(4);
+    h.emitRealtime(5);
+    assert.deepEqual(revisions, [5]);
+    const call = h.calls.find((entry) => entry.operation === 'channel');
+    assert.equal(call.options.filter, 'user_id=eq.user-1');
 });

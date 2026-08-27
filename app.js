@@ -29,8 +29,8 @@
    A folder is only a label: `folder` holds its id, so deleting a folder
    never deletes what was in it.
 
-   All four are cached in localStorage for fast startup. File bytes live
-   separately in Supabase and are fetched only when downloaded.
+   All four are cached as individual IndexedDB records for fast startup.
+   File bytes live in private Supabase Storage and are fetched on demand.
    ============================================================ */
 
 (function () {
@@ -71,6 +71,13 @@
         noteSort: 'docket.noteSort', fileSort: 'docket.fileSort',
         noteView: 'docket.noteView'
     };
+
+    /* The pre-Supabase app kept a GitHub PAT and Gist id in this origin's
+       localStorage. They have no purpose now, but would otherwise remain on
+       every previously used browser indefinitely. */
+    ['docket.token', 'docket.gistId'].forEach((key) => {
+        try { localStorage.removeItem(key); } catch (e) {}
+    });
 
     let notes = [];
     let files = [];
@@ -234,21 +241,15 @@
     /* ---- persistence ---------------------------------------------------- */
 
     function cache() {
-        try {
-            localStorage.setItem(LS.notes, JSON.stringify(notes));
-            localStorage.setItem(LS.files, JSON.stringify(files));
-            localStorage.setItem(LS.folders, JSON.stringify(folders));
-            localStorage.setItem(LS.trash, JSON.stringify(trash));
-        } catch (e) { /* quota or private mode — Supabase is the real home */ }
+        Store.cacheDocket({ notes, files, folders, trash });
     }
 
-    function readCache() {
-        const get = (k) => { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { return []; } };
-        const n = get(LS.notes), f = get(LS.files), d = get(LS.folders), t = get(LS.trash);
-        if (Array.isArray(n)) notes = n;
-        if (Array.isArray(f)) files = f;
-        if (Array.isArray(d)) folders = d;
-        if (Array.isArray(t)) trash = t;
+    async function readCache() {
+        const cached = await Store.readCache();
+        notes = cached.notes;
+        files = cached.files;
+        folders = cached.folders;
+        trash = cached.trash;
         try {
             activeFolder = localStorage.getItem(LS.active) || null;
             el('note-sort').value = localStorage.getItem(LS.noteSort) || 'updated';
@@ -260,15 +261,15 @@
         } catch (e) {}
     }
 
-    /* Structural mutations checkpoint the cold archive. Note keystrokes use
-       durableNote instead, so their save clock only writes one hot file. */
+    /* Structural mutations compute row deltas. A note keystroke persists and
+       queues only that note, never every cached collection. */
     function commit() {
         cache();
         Store.touchData();
     }
 
     function durableNote(note) {
-        cache();
+        Store.cacheItem('note', note);
         Store.touchNote(note.id);
     }
 
@@ -287,11 +288,15 @@
             version: 4, updated: new Date().toISOString()
         }), adoptRemote);
 
-        readCache();
-        purgeTrash();
+        await readCache();
         renderAll();
         lastPull = Date.now();
         await pullFromCloud();
+        purgeTrash();
+        Store.subscribe((revision) => refresh(true, revision));
+        const startMigration = () => Store.migrateLegacyFiles();
+        if ('requestIdleCallback' in window) requestIdleCallback(startMigration);
+        else setTimeout(startMigration, 1000);
         reflectConnection();
     }
 
@@ -324,6 +329,7 @@
     el('lock-btn').addEventListener('click', async () => {
         Store.checkpoint();
         if (Store.hasPending()) await Store.flush();
+        await Store.clearCache();
         await Store.signOut();
         [LS.notes, LS.files, LS.folders, LS.trash].forEach((key) => {
             try { localStorage.removeItem(key); } catch (e) {}
@@ -347,15 +353,15 @@
      * note you are typing into. Deletes now travel as `trash` tombstones,
      * so a merge propagates them just as faithfully and keeps the rest.
      */
-    async function pullFromCloud() {
+    async function pullFromCloud(revision) {
         try {
-            const data = await Store.load();
+            const data = await Store.load(revision);
             if (!data) return;              /* not connected or unchanged */
             adoptRemote(Store.merge(data, { notes, files, folders, trash }));
+            /* A local IndexedDB record can be newer than the server after an
+               offline close. Queue only those merged row differences. */
+            Store.touchData();
             purgeTrash();
-            /* Any hot file recovered above is now represented in `notes`.
-               Fold the ones that are ours to fold and delete them. */
-            Store.foldLoadedHot();
         } catch (err) { /* onStatus already surfaced it */ }
     }
 
@@ -370,9 +376,8 @@
                !el('focus-modal').hidden;
     };
 
-    /* Most merges change nothing — the poll exists to notice the ones that
-       do. Comparing what the board actually draws is what keeps a quiet
-       45-second tick from re-rendering the grid, and a re-render costs a
+    /* Most merges change nothing. Comparing what the board actually draws
+       keeps a Realtime delta from needlessly re-rendering the grid, which costs a
        caret, a text selection and a scroll position. Bodies are left out:
        every edit to one bumps `updated`, and hashing a thousand-line note
        on a timer to learn what its timestamp already says is waste.
@@ -508,25 +513,30 @@
 
     window.addEventListener('focus', () => refresh());
 
-    /* Two browsers side by side on one screen are never hidden and never
-       blurred, so neither of the above ever fires. The quiet poll checks
-       only the document version; a change triggers the full load above. */
-    setInterval(() => {
-        if (document.visibilityState === 'visible') refresh();
-    }, CFG.POLL_MS);
-
     let lastPull = 0;
     let pulling = null;
+    let queuedRevision = 0;
 
-    /** Re-read Supabase, at most once per POLL_MS unless forced. Returns
+    /** Re-read Supabase on focus, at most once per REFRESH_THROTTLE_MS unless
+     *  forced by Realtime. Returns
      *  the in-flight pull if one is already running, so a burst of focus
      *  and visibility events makes one request between them. */
-    function refresh(force) {
+    function refresh(force, revision) {
         if (!unlocked || !Store.isConnected()) return Promise.resolve();
-        if (pulling) return pulling;
-        if (!force && Date.now() - lastPull < CFG.POLL_MS) return Promise.resolve();
+        if (pulling) {
+            queuedRevision = Math.max(queuedRevision, Number(revision || 0));
+            return pulling;
+        }
+        if (!force && Date.now() - lastPull < CFG.REFRESH_THROTTLE_MS) return Promise.resolve();
         lastPull = Date.now();
-        pulling = pullFromCloud().finally(() => { pulling = null; });
+        pulling = pullFromCloud(revision).finally(() => {
+            pulling = null;
+            if (queuedRevision) {
+                const next = queuedRevision;
+                queuedRevision = 0;
+                refresh(true, next);
+            }
+        });
         return pulling;
     }
 
@@ -1864,7 +1874,7 @@
         const incoming = Array.from(fileList || []);
         if (!incoming.length) return;
 
-        /* Bytes live in Supabase, not on this device. */
+        /* Bytes live in private Supabase Storage, not Postgres. */
         if (!Store.isConnected()) {
             toast('Sign in to store files');
             return;
@@ -1881,23 +1891,21 @@
                 break;
             }
 
-            /* Read first, register second. The other order leaves a row in
-               `files` with no matching blob if the read fails. */
-            let payload;
+            const id = uid();
+            let path;
             try {
-                payload = await readBase64(file);
+                path = await Store.putBlob(id, file);
             } catch (err) {
-                toast(`Could not read ${file.name}`);
+                toast(`Could not upload ${file.name}`);
                 continue;
             }
 
-            const id = uid();
-            Store.putBlob(id, payload);
             files.unshift({
                 id,
                 name: file.name,
                 size: file.size,
                 type: file.type || 'application/octet-stream',
+                storagePath: path,
                 folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
                 added: new Date().toISOString()
             });
@@ -1908,24 +1916,6 @@
         renderAll();
         commit();
         toast(`${added} file${added === 1 ? '' : 's'} uploading…`);
-    }
-
-    /* readAsDataURL hands back "data:<mime>;base64,<payload>"; only the
-       payload is stored, since the mime is already in the metadata. */
-    function readBase64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(file);
-        });
-    }
-
-    function base64ToBlob(b64, type) {
-        const bin = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        return new Blob([bytes], { type: type || 'application/octet-stream' });
     }
 
     function saveBlob(blob, filename) {
@@ -2021,14 +2011,13 @@
            take a moment on a large file. */
         btn.classList.add('is-working');
         try {
-            const payload = await Store.getBlob(meta.id);
-            if (!payload) { toast('That file has no contents in Supabase yet'); return; }
+            const blob = await Store.getBlob(meta);
+            if (!blob) { toast('That file has no contents in Supabase yet'); return; }
 
             if (btn.classList.contains('act-get')) {
-                saveBlob(base64ToBlob(payload, meta.type), meta.name);
+                saveBlob(blob, meta.name);
             } else if (btn.classList.contains('act-copy')) {
-                await navigator.clipboard.writeText(
-                    await base64ToBlob(payload, meta.type).text());
+                await navigator.clipboard.writeText(await blob.text());
                 toast('Copied to clipboard');
             }
         } catch (err) {
@@ -2137,7 +2126,8 @@
         await pullFromCloud();
         let revs;
         try {
-            revs = await Store.refreshHistory();
+            await Store.loadHistory();
+            revs = Store.history();
         } catch (error) {
             el('history-list').innerHTML = '<li class="hint">History is unavailable.</li>';
             showBanner(error.message);
@@ -2149,7 +2139,7 @@
                 <div class="history-main">
                     <span class="history-when">${esc(new Date(r.at).toLocaleString())}</span>
                     <span class="history-delta">${i === 0 ? 'current' :
-                        `+${r.added || 0} / −${r.removed || 0} lines`}</span>
+                        `${r.added || 0} item change${r.added === 1 ? '' : 's'}`}</span>
                 </div>
                 ${i === 0 ? '' : '<button class="btn btn-ghost btn-sm act-restore" type="button">Restore</button>'}
             </li>`).join('')
