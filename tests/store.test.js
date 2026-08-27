@@ -6,7 +6,69 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.resolve(__dirname, '..', 'store.js'), 'utf8');
 
-function harness() {
+/* Enough of IndexedDB to exercise the blob cache: the handful of calls
+   store.js actually makes, with requests resolved on the microtask queue
+   because the harness deliberately never runs its stubbed timers. */
+function fakeIndexedDB() {
+    const stores = new Map();
+    const keyPaths = new Map();
+    const later = (fn) => Promise.resolve().then(fn);
+
+    function storeFor(name) {
+        const data = stores.get(name);
+        const keyPath = keyPaths.get(name);
+        return {
+            get(key) {
+                const request = {};
+                later(() => { request.result = data.get(key); if (request.onsuccess) request.onsuccess(); });
+                return request;
+            },
+            getAll() {
+                const request = {};
+                later(() => {
+                    request.result = Array.from(data.values());
+                    if (request.onsuccess) request.onsuccess();
+                });
+                return request;
+            },
+            put(value) { data.set(value[keyPath], value); return {}; },
+            delete(key) { data.delete(key); return {}; },
+            clear() { data.clear(); return {}; }
+        };
+    }
+
+    const db = {
+        objectStoreNames: { contains: (name) => stores.has(name) },
+        createObjectStore(name, options) {
+            stores.set(name, new Map());
+            keyPaths.set(name, options.keyPath);
+            return storeFor(name);
+        },
+        close() {},
+        transaction(names) {
+            const tx = { objectStore: storeFor };
+            /* oncomplete is assigned after the caller's writes run, so it
+               cannot fire until the current synchronous block is done. */
+            later(() => { if (tx.oncomplete) tx.oncomplete(); });
+            return tx;
+        }
+    };
+
+    return {
+        open() {
+            const request = { result: db };
+            later(() => {
+                if (request.onupgradeneeded) request.onupgradeneeded();
+                if (request.onsuccess) request.onsuccess();
+            });
+            return request;
+        },
+        stores
+    };
+}
+
+function harness(options) {
+    const opts = options || {};
     const calls = [];
     const rows = {
         docket_sync_state: { revision: 4 },
@@ -52,7 +114,7 @@ function harness() {
         },
         download: async (filePath) => {
             calls.push({ operation: 'download', path: filePath });
-            return { data: { text: async () => 'hello' }, error: null };
+            return { data: { size: 5, type: 'text/plain', text: async () => 'hello' }, error: null };
         },
         remove: async (paths) => {
             calls.push({ operation: 'remove', paths });
@@ -100,8 +162,10 @@ function harness() {
         DOCKET_CONFIG: {
             SAVE_DEBOUNCE_MS: 900, MAX_SAVE_WAIT_MS: 5000,
             RETRY_BASE_MS: 2000, RETRY_MAX_MS: 60000, HISTORY_LIMIT: 40,
-            STORAGE_BUCKET: 'doc-files-v2', BLOB_MIGRATION_PAUSE_MS: 0
+            STORAGE_BUCKET: 'doc-files-v2', BLOB_MIGRATION_PAUSE_MS: 0,
+            BLOB_CACHE_BYTES: opts.blobCacheBytes || 200 * 1024 * 1024
         },
+        indexedDB: opts.cache ? fakeIndexedDB() : null,
         SUPABASE_CONFIG: {
             url: 'https://example.supabase.co', publishableKey: 'public-key', schema: 'doc'
         },
@@ -117,7 +181,7 @@ function harness() {
     vm.createContext(context);
     vm.runInContext(source, context, { filename: 'store.js' });
     return {
-        Store: window.DocketStore, calls, rows,
+        Store: window.DocketStore, calls, rows, cache: window.indexedDB,
         setDelta: (value) => { delta = value; },
         emitRealtime: (revision) => subscribedHandler({ new: { revision } }),
         createArgs: () => createArgs
@@ -225,4 +289,94 @@ test('Realtime subscribes to the owner sync row and ignores the current revision
     assert.deepEqual(revisions, [5]);
     const call = h.calls.find((entry) => entry.operation === 'channel');
     assert.equal(call.options.filter, 'user_id=eq.user-1');
+});
+
+/* ---- cached file bytes -------------------------------------------------
+
+   Storage egress is the part of the free tier that is spent rather than
+   occupied, so "did this touch the network at all" is the assertion that
+   matters in every one of these. */
+
+test('a file downloaded once is served from the device the second time', async () => {
+    const h = harness({ cache: true });
+    await h.Store.getSession();
+    const file = { id: 'file-1', storagePath: 'user-1/file-1' };
+
+    assert.equal(await (await h.Store.getBlob(file)).text(), 'hello');
+    assert.equal(await (await h.Store.getBlob(file)).text(), 'hello');
+
+    assert.equal(h.calls.filter((call) => call.operation === 'download').length, 1);
+});
+
+test('bytes just uploaded are cached, so reading them back costs no egress', async () => {
+    const h = harness({ cache: true });
+    await h.Store.getSession();
+    const blob = { size: 12, type: 'video/mp4', text: async () => 'twelve bytes' };
+
+    await h.Store.putBlob('file-2', blob);
+    const read = await h.Store.getBlob({ id: 'file-2', storagePath: 'user-1/file-2' });
+
+    assert.equal(read, blob);
+    assert.equal(h.calls.some((call) => call.operation === 'download'), false);
+});
+
+test('the local cache evicts least-recently-used bytes instead of growing without bound', async () => {
+    const h = harness({ cache: true, blobCacheBytes: 30 });
+    await h.Store.getSession();
+    const blob = (name) => ({ size: 20, type: 'video/mp4', text: async () => name });
+
+    await h.Store.putBlob('old', blob('old'));
+    await h.Store.putBlob('new', blob('new'));
+
+    /* 40 bytes will not fit in 30, so the older file gave up its place. */
+    assert.deepEqual(Array.from(h.cache.stores.get('blobs').keys()), ['new']);
+    assert.deepEqual(Array.from(h.cache.stores.get('blobstats').keys()), ['new']);
+
+    assert.equal(await (await h.Store.getBlob({ id: 'new', storagePath: 'user-1/new' })).text(), 'new');
+    assert.equal(h.calls.some((call) => call.operation === 'download'), false);
+
+    await h.Store.getBlob({ id: 'old', storagePath: 'user-1/old' });
+    assert.ok(h.calls.some((call) => call.operation === 'download' && call.path === 'user-1/old'));
+});
+
+test('a file larger than the whole local budget is fetched but never cached', async () => {
+    const h = harness({ cache: true, blobCacheBytes: 10 });
+    await h.Store.getSession();
+    await h.Store.readCache();
+
+    await h.Store.putBlob('huge', { size: 999, type: 'video/mp4' });
+
+    /* Caching it would have evicted everything else to hold only itself. */
+    assert.equal(h.cache.stores.get('blobs').size, 0);
+    assert.ok(h.calls.some((call) => call.operation === 'upload' && call.path === 'user-1/huge'));
+});
+
+test('deleting a file drops its cached bytes as well as the object', async () => {
+    const h = harness({ cache: true });
+    await h.Store.getSession();
+    await h.Store.putBlob('file-3', { size: 8, type: 'text/plain' });
+    assert.equal(h.cache.stores.get('blobs').size, 1);
+
+    h.Store.dropBlob('file-3');
+    await h.Store.flush();
+
+    assert.equal(h.cache.stores.get('blobs').size, 0);
+    assert.equal(h.cache.stores.get('blobstats').size, 0);
+    assert.ok(h.calls.some((call) => call.operation === 'remove' &&
+        call.paths.includes('user-1/file-3')));
+});
+
+test('a browser that refuses IndexedDB leaves the docket working over the network', async () => {
+    const h = harness({ cache: true });
+    h.cache.open = () => {
+        const request = {};
+        Promise.resolve().then(() => request.onerror && request.onerror());
+        return request;
+    };
+    await h.Store.getSession();
+
+    const docket = await h.Store.readCache();
+    assert.equal(docket.notes.length, 0);
+    assert.equal(docket.files.length, 0);
+    assert.equal(await (await h.Store.getBlob({ id: 'x', storagePath: 'user-1/x' })).text(), 'hello');
 });

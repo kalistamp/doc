@@ -29,6 +29,8 @@
     let cacheItems = new Map();
     let cacheDbPromise = null;
     let cacheQueue = Promise.resolve();
+    let blobStats = new Map();
+    let blobStatsRead = null;
 
     const emit = (state, detail) => listeners.forEach((fn) => fn(state, detail));
     const normalise = (data) => {
@@ -142,6 +144,8 @@
         pendingBlobDeletes = new Set();
         cacheItems = new Map();
         cacheDbPromise = null;
+        blobStats = new Map();
+        blobStatsRead = null;
     }
 
     async function requireUser() {
@@ -429,11 +433,15 @@
             cacheControl: '3600', contentType: blob.type || 'application/octet-stream', upsert: false
         });
         if (error) throw new Error(error.message);
+        /* The bytes are already in hand, so the first read of a file this
+           device just uploaded should not go back out over the network. */
+        await writeBlobCache(id, blob).catch(() => null);
         return path;
     }
 
     function dropBlob(id) {
         pendingBlobDeletes.add(String(id));
+        dropBlobCache(id);
         schedule();
     }
 
@@ -486,15 +494,27 @@
     async function getBlob(file) {
         if (!file || file.id == null) return null;
         await requireUser();
+        const cached = await readBlobCache(file.id).catch(() => null);
+        if (cached) return cached;
         const { data, error } = await client().storage.from(CFG.STORAGE_BUCKET)
             .download(file.storagePath || storagePath(file.id));
-        if (!error) return data;
+        if (!error) {
+            await writeBlobCache(file.id, data).catch(() => null);
+            return data;
+        }
         const docket = sources.data ? normalise(sources.data()) : normalise(null);
         const live = docket.files.find((entry) => String(entry.id) === String(file.id));
-        if (live) return migrateLegacyEntity('file', live, live);
-        const grave = docket.trash.find((entry) => entry.kind === 'file' && entry.item &&
-            String(entry.item.id) === String(file.id));
-        if (grave) return migrateLegacyEntity('trash', grave, grave.item);
+        const grave = live ? null : docket.trash.find((entry) => entry.kind === 'file' &&
+            entry.item && String(entry.item.id) === String(file.id));
+        if (live || grave) {
+            /* A null here means the legacy row held no bytes to migrate,
+               which the caller reports rather than treats as a failure. */
+            const legacy = live
+                ? await migrateLegacyEntity('file', live, live)
+                : await migrateLegacyEntity('trash', grave, grave.item);
+            if (legacy) await writeBlobCache(file.id, legacy).catch(() => null);
+            return legacy;
+        }
         throw new Error(error.message || 'Could not download that file.');
     }
 
@@ -576,25 +596,49 @@
     function openCache() {
         if (cacheDbPromise) return cacheDbPromise;
         if (!window.indexedDB || !userId) return Promise.resolve(null);
-        cacheDbPromise = new Promise((resolve, reject) => {
-            const request = window.indexedDB.open(`docket-cache-v2-${userId}`, 1);
+        cacheDbPromise = new Promise((resolve) => {
+            const request = window.indexedDB.open(`docket-cache-v2-${userId}`, 2);
             request.onupgradeneeded = () => {
-                if (!request.result.objectStoreNames.contains('items')) {
-                    request.result.createObjectStore('items', { keyPath: 'key' });
+                const db = request.result;
+                if (!db.objectStoreNames.contains('items')) {
+                    db.createObjectStore('items', { keyPath: 'key' });
+                }
+                /* File bytes sit beside the records, split from their size
+                   ledger so the budget can be totalled without reading a
+                   single video back out of the database. */
+                if (!db.objectStoreNames.contains('blobs')) {
+                    db.createObjectStore('blobs', { keyPath: 'id' });
+                }
+                if (!db.objectStoreNames.contains('blobstats')) {
+                    db.createObjectStore('blobstats', { keyPath: 'id' });
                 }
             };
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                /* A second tab opening a newer version must not be held off
+                   by this one keeping the old connection alive. */
+                request.result.onversionchange = () => {
+                    request.result.close();
+                    cacheDbPromise = null;
+                };
+                resolve(request.result);
+            };
+            /* The cache is an optimisation, so a browser that refuses it —
+               or an old tab blocking the upgrade — must not take the docket
+               down with it. Without a cache this is simply the path a fresh
+               device already takes. */
+            request.onerror = () => resolve(null);
+            request.onblocked = () => resolve(null);
         });
         return cacheDbPromise;
     }
 
-    function cacheTransaction(mode, run) {
+    function cacheTransaction(names, mode, run) {
+        const stores = [].concat(names);
         return openCache().then((db) => {
             if (!db) return null;
             return new Promise((resolve, reject) => {
-                const tx = db.transaction('items', mode);
-                run(tx.objectStore('items'));
+                const tx = db.transaction(stores, mode);
+                run(...stores.map((name) => tx.objectStore(name)));
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => reject(tx.error);
                 tx.onabort = () => reject(tx.error);
@@ -639,7 +683,7 @@
         const key = itemKey(type, id);
         const value = clone(data);
         cacheItems.set(key, value);
-        return enqueueCache(() => cacheTransaction('readwrite', (store) => {
+        return enqueueCache(() => cacheTransaction('items', 'readwrite', (store) => {
             store.put({ key, data: value });
         }));
     }
@@ -649,7 +693,7 @@
         const changes = diffItems(cacheItems, desired);
         cacheItems = desired;
         if (!changes.size) return Promise.resolve();
-        return enqueueCache(() => cacheTransaction('readwrite', (store) => {
+        return enqueueCache(() => cacheTransaction('items', 'readwrite', (store) => {
             changes.forEach((change, key) => {
                 if (change.action === 'delete') store.delete(key);
                 else store.put({ key, data: change.data });
@@ -657,9 +701,105 @@
         }));
     }
 
+    /* ---- cached file bytes ---------------------------------------------
+
+       Storage egress is the scarcest part of the free tier, and every
+       download, copy, and preview used to spend it on bytes this device had
+       already seen. What is held locally is capped separately from what may
+       be stored in the cloud: a phone should not carry the whole docket to
+       save a download it may never repeat. */
+
+    function readBlobStats() {
+        if (blobStatsRead) return blobStatsRead;
+        blobStatsRead = openCache().then((db) => {
+            if (!db) return [];
+            return new Promise((resolve) => {
+                const request = db.transaction('blobstats').objectStore('blobstats').getAll();
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = () => resolve([]);
+            });
+        }).then((records) => {
+            blobStats = new Map(records.map((record) => [record.id, record]));
+            return blobStats;
+        }).catch(() => blobStats);
+        return blobStatsRead;
+    }
+
+    async function readBlobCache(id) {
+        const key = String(id);
+        await readBlobStats();
+        if (!blobStats.has(key)) return null;
+        const db = await openCache();
+        if (!db) return null;
+        const record = await new Promise((resolve) => {
+            const request = db.transaction('blobs').objectStore('blobs').get(key);
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => resolve(null);
+        });
+        /* The ledger claimed bytes that are not there — an eviction by the
+           browser, most likely. Forget the claim and pay for the download. */
+        if (!record || !record.blob) {
+            blobStats.delete(key);
+            return null;
+        }
+        const stat = blobStats.get(key);
+        stat.used = Date.now();
+        enqueueCache(() => cacheTransaction('blobstats', 'readwrite',
+            (stats) => stats.put({ id: key, size: stat.size, used: stat.used })));
+        return record.blob;
+    }
+
+    function writeBlobCache(id, blob) {
+        const key = String(id);
+        const budget = CFG.BLOB_CACHE_BYTES || 0;
+        /* One file larger than the whole budget would evict everything else
+           to hold only itself, which is worse than not caching it at all. */
+        if (!blob || !blob.size || !budget || blob.size > budget) return Promise.resolve(null);
+        return readBlobStats().then(() => {
+            let total = blob.size;
+            blobStats.forEach((stat, other) => {
+                if (other !== key) total += stat.size || 0;
+            });
+            const evict = [];
+            Array.from(blobStats.entries())
+                .filter(([other]) => other !== key)
+                .sort((a, b) => (a[1].used || 0) - (b[1].used || 0))
+                .forEach(([other, stat]) => {
+                    if (total <= budget) return;
+                    evict.push(other);
+                    total -= stat.size || 0;
+                });
+
+            const record = { id: key, size: blob.size, used: Date.now() };
+            evict.forEach((other) => blobStats.delete(other));
+            blobStats.set(key, record);
+            return enqueueCache(() => cacheTransaction(['blobs', 'blobstats'], 'readwrite',
+                (blobs, stats) => {
+                    evict.forEach((other) => { blobs.delete(other); stats.delete(other); });
+                    blobs.put({ id: key, blob });
+                    stats.put(record);
+                }).catch((error) => {
+                    /* Out of quota, most likely. Drop the claim so the ledger
+                       keeps describing what is actually on the disk. */
+                    blobStats.delete(key);
+                    throw error;
+                }));
+        });
+    }
+
+    function dropBlobCache(id) {
+        const key = String(id);
+        blobStats.delete(key);
+        return enqueueCache(() => cacheTransaction(['blobs', 'blobstats'], 'readwrite',
+            (blobs, stats) => { blobs.delete(key); stats.delete(key); }));
+    }
+
     function clearCache() {
         cacheItems = new Map();
-        return enqueueCache(() => cacheTransaction('readwrite', (store) => store.clear()));
+        blobStats = new Map();
+        blobStatsRead = null;
+        return enqueueCache(() => cacheTransaction(['items', 'blobs', 'blobstats'], 'readwrite',
+            (items, blobs, stats) => { items.clear(); blobs.clear(); stats.clear(); }));
     }
 
     window.DocketStore = {

@@ -10,7 +10,15 @@ shared Supabase project.
   tombstone per row; edits send only changed rows.
 - `doc.docket_item_versions` and `doc.docket_revision_events` provide delta
   history without copying the whole docket on every save.
-- A private `doc-files-v2` Supabase Storage bucket holds file bytes.
+- A private `doc-files-v2` Supabase Storage bucket holds file bytes, up to
+  50 MB each and 800 MB in total. The per-file ceiling is enforced by the
+  bucket's `file_size_limit`; `MAX_FILE_BYTES` in `config.js` only turns the
+  resulting 413 into a readable message, so the two must be changed together.
+- The Files view presents the same byte budget as an accessible usage meter;
+  files retained in Trash count until they are permanently purged.
+- IndexedDB also caches downloaded file bytes, capped by `BLOB_CACHE_BYTES`
+  and evicted least-recently-used first, so re-reading a file spends no
+  Storage egress.
 - `doc.docket_sync_state` drives filtered Realtime updates; there is no
   background database polling loop.
 - IndexedDB caches individual records locally, so a keystroke persists only

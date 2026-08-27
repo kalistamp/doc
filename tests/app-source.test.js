@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+const config = fs.readFileSync(path.join(root, 'config.js'), 'utf8');
 
 test('high-frequency search path updates visibility without rendering cards', () => {
     const listener = app.match(/el\('search'\)\.addEventListener\('input', \(\) => \{([\s\S]*?)\n    \}\);/);
@@ -332,9 +333,9 @@ test('the merge icon is plain geometry, coloured by nothing of its own', () => {
 test('the cache buster moved with the scripts and the sheet', () => {
     /* Pages serves this repo root; a returning visitor otherwise runs a
        stale app.js against the new markup. */
-    assert.doesNotMatch(html, /\?v=18/);
+    assert.doesNotMatch(html, /\?v=19/);
     ['style.css', 'config.js', 'store.js', 'markdown.js', 'app.js'].forEach((asset) => {
-        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=19`), `${asset} is busted`);
+        assert.match(html, new RegExp(`${asset.replace('.', '\\.')}\\?v=20`), `${asset} is busted`);
     });
 });
 
@@ -552,4 +553,41 @@ test('every modal dismisses through the guarded helper, none on a bare target te
     });
     assert.doesNotMatch(app, /if \(e\.target === el\('[a-z-]+-modal'\)\)/,
                         'no modal closes on the click target alone');
+});
+
+test('storage is guarded by a byte budget rather than a file count', () => {
+    /* A count cannot tell 280 screenshots from 280 videos, and the old one
+       advertised roughly twice the space the plan actually grants. */
+    assert.doesNotMatch(app, /MAX_FILES/);
+    assert.doesNotMatch(config, /MAX_FILES/);
+    assert.match(app, /totalBytes\(\) \+ file\.size > CFG\.MAX_TOTAL_BYTES/);
+    assert.match(config, /MAX_TOTAL_BYTES: 800 \* 1024 \* 1024/);
+});
+
+test('the browser file ceiling matches the one the Storage bucket enforces', () => {
+    /* 50 * 1024 * 1024 = 52428800, the `file_size_limit` set on
+       `doc-files-v2` by 20260827130000_doc_raise_file_size_limit_50mb.sql. The
+       bucket answers 413 whether or not the browser agrees, so a change to
+       either one that is not made to the other is a broken upload. */
+    assert.match(config, /MAX_FILE_BYTES: 50 \* 1024 \* 1024/);
+    assert.equal(50 * 1024 * 1024, 52428800);
+});
+
+test('the Files view exposes the byte budget as an accessible live meter', () => {
+    assert.match(html, /<progress id="storage-meter"[^>]*aria-label="Supabase storage used"/s);
+    assert.match(app, /meter\.max = Math\.max\(limit, 1\)/);
+    assert.match(app, /meter\.value = Math\.min\(used, meter\.max\)/);
+    assert.match(app, /meter\.setAttribute\('aria-valuetext'/);
+    assert.match(app, /classList\.toggle\('is-near', ratio >= \.8 && ratio < 1\)/);
+    assert.match(app, /classList\.toggle\('is-full', ratio >= 1\)/);
+});
+
+test('a long upload reports progress and saves each file as it lands', () => {
+    /* app.js is CRLF, so every multi-line pattern here tolerates the \r. */
+    const accept = app.match(/async function acceptFiles\(fileList\)[\s\S]*?\r?\n    \}\r?\n/);
+    assert.ok(accept, 'acceptFiles exists');
+    assert.match(accept[0], /Uploading \$\{file\.name\}/);
+    assert.match(accept[0], /renderFiles\(\);\s+commit\(\);/);
+    /* Whatever the batch does, the dropzone stops claiming to be busy. */
+    assert.match(accept[0], /\} finally \{[\s\S]*?reflectConnection\(\);/);
 });

@@ -473,7 +473,7 @@
         const on = Store.isConnected();
         el('connect-card').hidden = on;
         el('dropzone-hint').textContent = on
-            ? `Up to ${formatBytes(CFG.MAX_FILE_BYTES)} each · ${CFG.MAX_FILES} files`
+            ? `Up to ${formatBytes(CFG.MAX_FILE_BYTES)} each · ${formatBytes(CFG.MAX_TOTAL_BYTES)} total`
             : 'Sign in to store files';
         el('dropzone').classList.toggle('is-disabled', !on);
         if (!on) el('foot-stamp').textContent = 'not connected';
@@ -1868,7 +1868,14 @@
     window.addEventListener('dragover', (e) => e.preventDefault());
     window.addEventListener('drop', (e) => e.preventDefault());
 
-    const totalBytes = () => files.reduce((sum, f) => sum + (f.size || 0), 0);
+    /* A trashed file keeps its bytes in Supabase so that it can be
+       restored, so it is spending the budget exactly as much as a listed
+       one. Left out, a 50 MB video churned through the trash would let real
+       usage run to twice what the guard believes. */
+    const trashedBytes = () => trash.reduce((sum, t) => sum +
+        (t.kind === 'file' && !t.purged && t.item ? t.item.size || 0 : 0), 0);
+    const totalBytes = () => files.reduce((sum, f) => sum + (f.size || 0), 0)
+        + trashedBytes();
 
     async function acceptFiles(fileList) {
         const incoming = Array.from(fileList || []);
@@ -1881,41 +1888,60 @@
         }
 
         let added = 0;
-        for (const file of incoming) {
-            if (file.size > CFG.MAX_FILE_BYTES) {
-                toast(`${file.name} is ${formatBytes(file.size)} — the limit is ${formatBytes(CFG.MAX_FILE_BYTES)} per file`);
-                continue;
-            }
-            if (files.length >= CFG.MAX_FILES) {
-                toast(`The file limit is ${CFG.MAX_FILES}; delete something first`);
-                break;
-            }
+        try {
+            for (const [index, file] of incoming.entries()) {
+                if (file.size > CFG.MAX_FILE_BYTES) {
+                    toast(`${file.name} is ${formatBytes(file.size)} — the limit is ${formatBytes(CFG.MAX_FILE_BYTES)} per file`);
+                    continue;
+                }
+                /* Read fresh each time: the budget is spent by the files
+                   already added in this same batch, not only by the ones
+                   that were there when it started. */
+                if (totalBytes() + file.size > CFG.MAX_TOTAL_BYTES) {
+                    toast(`That would pass the ${formatBytes(CFG.MAX_TOTAL_BYTES)} budget — delete something first`);
+                    break;
+                }
 
-            const id = uid();
-            let path;
-            try {
-                path = await Store.putBlob(id, file);
-            } catch (err) {
-                toast(`Could not upload ${file.name}`);
-                continue;
-            }
+                /* A file this size is a long silence otherwise, and a toast
+                   would expire well before the transfer finished. */
+                el('dropzone-hint').textContent = incoming.length > 1
+                    ? `Uploading ${file.name} — ${index + 1} of ${incoming.length}…`
+                    : `Uploading ${file.name}…`;
 
-            files.unshift({
-                id,
-                name: file.name,
-                size: file.size,
-                type: file.type || 'application/octet-stream',
-                storagePath: path,
-                folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
-                added: new Date().toISOString()
-            });
-            added++;
+                const id = uid();
+                let path;
+                try {
+                    path = await Store.putBlob(id, file);
+                } catch (err) {
+                    toast(`Could not upload ${file.name}`);
+                    continue;
+                }
+
+                files.unshift({
+                    id,
+                    name: file.name,
+                    size: file.size,
+                    type: file.type || 'application/octet-stream',
+                    storagePath: path,
+                    folder: activeFolder && activeFolder !== UNFILED ? activeFolder : null,
+                    added: new Date().toISOString()
+                });
+                added++;
+
+                /* Each file is listed and queued for save as it lands. A
+                   batch of videos takes long enough that holding all of it
+                   until the end would risk losing bytes already paid for. */
+                renderFiles();
+                commit();
+            }
+        } finally {
+            /* Whatever happened, the dropzone stops claiming to be busy. */
+            reflectConnection();
         }
 
         if (!added) return;
         renderAll();
-        commit();
-        toast(`${added} file${added === 1 ? '' : 's'} uploading…`);
+        toast(`${added} file${added === 1 ? '' : 's'} added`);
     }
 
     function saveBlob(blob, filename) {
@@ -1961,9 +1987,24 @@
                 </div>
             </li>`).join('');
 
-        el('file-note').textContent = files.length
-            ? `${files.length} of ${CFG.MAX_FILES} files · ${formatBytes(totalBytes())} stored in Supabase`
-            : '';
+        /* The visible meter and the upload guard share totalBytes(), so the
+           UI cannot promise room that the next upload would then refuse.
+           Naming Trash's share explains why usage can exceed visible files. */
+        const held = trashedBytes();
+        const used = totalBytes();
+        const limit = CFG.MAX_TOTAL_BYTES;
+        const ratio = limit > 0 ? used / limit : 0;
+        const meter = el('storage-meter');
+        meter.max = Math.max(limit, 1);
+        meter.value = Math.min(used, meter.max);
+        meter.setAttribute('aria-valuetext',
+            `${formatBytes(used)} of ${formatBytes(limit)} used`);
+        meter.classList.toggle('is-near', ratio >= .8 && ratio < 1);
+        meter.classList.toggle('is-full', ratio >= 1);
+        el('file-note').textContent =
+            `${files.length} file${files.length === 1 ? '' : 's'} · ${formatBytes(used)} `
+            + `of ${formatBytes(limit)} used in Supabase`
+            + (held ? ` · ${formatBytes(held)} of that in the trash` : '');
         applyFileFilters();
     }
 

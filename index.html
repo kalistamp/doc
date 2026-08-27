@@ -15,7 +15,7 @@
      deliberate duplicate of just enough logic to beat first paint. -->
 <script>(function(){try{const s=localStorage.getItem('docket.theme');const d=s?s==='dark':matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('theme-dark')}catch(_){}})();</script>
 
-<link rel="stylesheet" href="./style.css?v=19">
+<link rel="stylesheet" href="./style.css?v=20">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
 </head>
 <body>
@@ -266,7 +266,12 @@
 
             <ul id="file-list" class="file-list"></ul>
             <p id="file-none" class="hint" hidden>No files match that search.</p>
-            <p id="file-note" class="storage-text file-note"></p>
+            <div class="storage-budget">
+                <progress id="storage-meter" class="storage-meter" value="0" max="838860800"
+                          aria-label="Supabase storage used"
+                          aria-valuetext="0 B of 800 MB used">0%</progress>
+                <p id="file-note" class="storage-text file-note">0 B of 800 MB used in Supabase</p>
+            </div>
         </section>
 
         <!-- ---------------- TRASH ---------------- -->
@@ -448,9 +453,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"
         integrity="sha384-AkNSQdptcXlJ0/NBZc4qGk86cDVXcCevwoWgEKIpHOEfbvlXGLlIkimQtONt8KNf"
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="./config.js?v=19"></script>
-<script src="./store.js?v=19"></script>
-<script src="./markdown.js?v=19"></script>
-<script src="./app.js?v=19"></script>
+<script src="./config.js?v=20"></script>
+<script src="./store.js?v=20"></script>
+<script src="./markdown.js?v=20"></script>
+<script src="./app.js?v=20"></script>
 </body>
 </html>
