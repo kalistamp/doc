@@ -48,7 +48,24 @@
         return { type: key.slice(0, at), id: key.slice(at + 1) };
     };
     const clone = (value) => JSON.parse(JSON.stringify(value));
-    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    /* Item bodies round-trip through Postgres `jsonb`, which keeps object
+       keys in its own order rather than the one they were written in. A
+       plain stringify comparison therefore calls every item different after
+       any pull, so the diff never empties, the pending set never clears,
+       and the sync re-sends the same unchanged rows for as long as the tab
+       is open. Ordering the keys first makes this ask whether two items say
+       the same thing rather than whether they spell it the same way. */
+    const canonical = (value) => {
+        if (Array.isArray(value)) return value.map(canonical);
+        if (!value || typeof value !== 'object') return value;
+        return Object.keys(value).sort().reduce((out, key) => {
+            out[key] = canonical(value[key]);
+            return out;
+        }, {});
+    };
+    const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
     function flatten(docket) {
         const out = new Map();
@@ -309,7 +326,7 @@
         retryTimer = null;
         clearTimeout(flushTimer);
         if (Date.now() - dirtySince >= CFG.MAX_SAVE_WAIT_MS) { flush(); return; }
-        flushTimer = setTimeout(flush, CFG.SAVE_DEBOUNCE_MS);
+        flushTimer = setTimeout(() => flush(), CFG.SAVE_DEBOUNCE_MS);
     }
 
     function touchData() {
@@ -375,23 +392,39 @@
             if (sources.adopt) sources.adopt(merged);
             changes = Array.from(diffItems(knownItems, flatten(merged)).values());
             if (!changes.length) return;
+            /* Two writers that retry the instant they lose a conflict keep
+               meeting in the same place, each bumping the revision the other
+               just read. The jitter is the part that matters: it breaks the
+               symmetry so one of them gets through. */
+            await pause(CFG.CONFLICT_RETRY_BASE_MS * Math.pow(2, attempt) * (0.5 + Math.random()));
         }
         throw new Error('This docket changed elsewhere. Reload and try again.');
     }
 
+    /* One tab at a time may hold the sync. Backing off softens a collision
+       between two tabs but does not prevent it; taking the lock means the
+       second tab waits for the first to finish and then works from the
+       revision it actually left behind. The browser drops the lock if the
+       tab is closed or crashes, and a browser without Web Locks simply
+       behaves as it did before. */
+    const withSyncLock = (run) => (window.navigator && window.navigator.locks)
+        ? window.navigator.locks.request('docket-sync', run)
+        : run();
+
     const storagePath = (id) => `${userId}/${String(id).replace(/[^A-Za-z0-9._-]/g, '_')}`;
 
-    async function flush() {
+    async function flush(options) {
+        const opts = options || {};
         clearTimeout(flushTimer);
         if (!isConnected() || !hasPending()) return;
-        if (inFlight) { await inFlight.catch(() => {}); return flush(); }
+        if (inFlight) { await inFlight.catch(() => {}); return flush(opts); }
         const workChanges = Array.from(pendingChanges.values());
         const workDeletes = new Set(pendingBlobDeletes);
         pendingChanges = new Map();
         pendingBlobDeletes = new Set();
         dirtySince = 0;
         emit('saving');
-        inFlight = (async () => {
+        const work = async () => {
             await requireUser();
             for (let at = 0; at < workChanges.length; at += 200) {
                 await saveChanges(workChanges.slice(at, at + 200));
@@ -401,7 +434,13 @@
                     .remove(Array.from(workDeletes, storagePath));
                 if (error) throw new Error(error.message);
             }
-        })();
+        };
+        /* A page being unloaded cannot afford to queue behind another tab's
+           lock: it would be woken to run the save after it had gone. That is
+           what app.js has always meant by an unguarded flush, and the flag
+           was being dropped on the floor until now. Everywhere else the lock
+           is the thing keeping two tabs off one revision. */
+        inFlight = opts.unguarded ? work() : withSyncLock(work);
         try {
             await inFlight;
             lastError = null;
@@ -417,7 +456,11 @@
         } finally {
             inFlight = null;
         }
-        if (hasPending() && !lastError) flush();
+        /* Anything still pending goes back through the debounce. Calling
+           flush directly here made a save that left work behind start the
+           next one immediately, which is a loop with no quiet period in it
+           whenever the pending set refuses to empty. */
+        if (hasPending() && !lastError) schedule();
     }
 
     function scheduleRetry() {

@@ -161,11 +161,15 @@ function harness(options) {
     const window = {
         DOCKET_CONFIG: {
             SAVE_DEBOUNCE_MS: 900, MAX_SAVE_WAIT_MS: 5000,
-            RETRY_BASE_MS: 2000, RETRY_MAX_MS: 60000, HISTORY_LIMIT: 40,
+            RETRY_BASE_MS: 2000, RETRY_MAX_MS: 60000, CONFLICT_RETRY_BASE_MS: 150,
+            HISTORY_LIMIT: 40,
             STORAGE_BUCKET: 'doc-files-v2', BLOB_MIGRATION_PAUSE_MS: 0,
             BLOB_CACHE_BYTES: opts.blobCacheBytes || 200 * 1024 * 1024
         },
         indexedDB: opts.cache ? fakeIndexedDB() : null,
+        navigator: { locks: {
+            request: (name, run) => { calls.push({ operation: 'lock', name }); return run(); }
+        } },
         SUPABASE_CONFIG: {
             url: 'https://example.supabase.co', publishableKey: 'public-key', schema: 'doc'
         },
@@ -242,6 +246,55 @@ test('typing saves one note row rather than the complete docket', async () => {
     assert.equal(call.args.changes[0].entity_type, 'note');
     assert.equal(call.args.changes[0].data.body, 'one edited note');
     assert.equal('new_data' in call.args, false);
+});
+
+test('an item that comes back with its keys in another order is not a change', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    let state = await h.Store.load();
+    h.Store.bind(() => state, (next) => { state = next; });
+    /* Postgres hands jsonb back in its own key order, not the order the
+       item was written in. Same note, same values, rearranged: comparing
+       the spelling rather than the content made this a change, so the
+       pending set never emptied and the save re-ran for as long as the tab
+       stayed open. */
+    const note = state.notes[0];
+    state.notes[0] = { updated: note.updated, body: note.body, id: note.id };
+    h.Store.touchData();
+    await h.Store.flush();
+    assert.equal(h.calls.some((entry) => entry.name === 'apply_docket_changes'), false);
+    assert.equal(h.Store.hasPending(), false);
+});
+
+test('a save takes the cross-tab lock before it touches the shared revision', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    let state = await h.Store.load();
+    h.Store.bind(() => state, (next) => { state = next; });
+    state.notes[0].body = 'edited in this tab';
+    h.Store.touchNote('n1');
+    await h.Store.flush();
+    const lock = h.calls.findIndex((entry) => entry.operation === 'lock');
+    const rpc = h.calls.findIndex((entry) => entry.name === 'apply_docket_changes');
+    assert.notEqual(lock, -1, 'the sync runs inside a lock');
+    assert.equal(h.calls[lock].name, 'docket-sync');
+    assert.ok(lock < rpc, 'the lock is held before the revision is bumped');
+});
+
+test('an unloading page saves without queueing behind another tab', async () => {
+    const h = harness();
+    await h.Store.getSession();
+    let state = await h.Store.load();
+    h.Store.bind(() => state, (next) => { state = next; });
+    state.notes[0].body = 'typed just before the tab closed';
+    h.Store.touchNote('n1');
+    /* beforeunload asks for this flush. Waiting on a lock there means being
+       woken to save after the page has gone, so the guard is skipped and
+       the write goes straight out. */
+    await h.Store.flush({ keepalive: true, unguarded: true });
+    assert.equal(h.calls.some((entry) => entry.operation === 'lock'), false);
+    const call = h.calls.find((entry) => entry.name === 'apply_docket_changes');
+    assert.equal(call.args.changes[0].data.body, 'typed just before the tab closed');
 });
 
 test('structural changes send row upserts and deletes only', async () => {

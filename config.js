@@ -41,6 +41,13 @@ window.DOCKET_CONFIG = {
     RETRY_BASE_MS: 2000,
     RETRY_MAX_MS: 60000,
 
+    /* A losing writer waits this long, doubled per attempt and jittered,
+       before trying a conflicted save again. Retrying instantly let two
+       tabs invalidate each other's revision in lockstep for days, which is
+       what held the database at 90% CPU. Short enough that a real conflict
+       still resolves within a keystroke. */
+    CONFLICT_RETRY_BASE_MS: 150,
+
     /* Realtime handles active tabs. Focus events use this long throttle as
        a reconnect safety net, without a background polling loop. */
     REFRESH_THROTTLE_MS: 5 * 60 * 1000,
