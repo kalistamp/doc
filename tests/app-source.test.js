@@ -107,6 +107,33 @@ test('every card-sized view has a body height, and list is measured by neither',
     assert.match(sizeCard[1], /if \(view === 'list'\)[\s\S]*?return;[\s\S]*?scrollHeight/);
 });
 
+test('both bands are opened before a single card is measured', () => {
+    /* The bands ship hidden, and a card inside a display:none subtree
+       measures a scrollHeight of 0 — which reads as "this note fits". Every
+       pinned and Finish Next note therefore came back from a reload
+       unclamped, with no Expand control, until the first render that
+       happened to find the bands already open. */
+    assert.match(html, /<div id="finish-wrap" hidden>/);
+    assert.match(html, /<div id="pinned-wrap" hidden>/);
+    const render = app.match(/function renderNotes\(\) \{([\s\S]*?)\n    \}/);
+    assert.ok(render, 'renderNotes exists');
+    const opened = render[1].indexOf("el('pinned-wrap').hidden");
+    const measured = render[1].indexOf('sizeCard(card)');
+    assert.notEqual(opened, -1, 'renderNotes opens the bands itself');
+    assert.notEqual(measured, -1, 'renderNotes measures the cards');
+    assert.ok(opened < measured, 'the bands open before the measuring pass');
+});
+
+test('a card that is not laid out is left alone rather than measured as zero', () => {
+    /* Filtered rows are display:none too, so the resize pass would otherwise
+       clamp every hidden card to nothing and show it unclamped on return. */
+    const sizeCard = app.match(/function sizeCard\(card\) \{([\s\S]*?)\n    \}/);
+    assert.ok(sizeCard, 'sizeCard exists');
+    assert.match(sizeCard[1], /offsetParent === null\) return;/);
+    assert.ok(sizeCard[1].indexOf('offsetParent') < sizeCard[1].indexOf('scrollHeight'),
+        'the check comes before any measurement');
+});
+
 test('a device holding the retired compact preference lands on small', () => {
     assert.match(app, /LEGACY_NOTE_VIEWS = \{ compact: 'small' \}/);
     assert.match(app, /LEGACY_NOTE_VIEWS\[value\] \|\| value/);

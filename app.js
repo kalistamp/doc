@@ -977,6 +977,17 @@
         el('pinned-grid').innerHTML = pinned.map(noteCard).join('');
         el('note-grid').innerHTML = rest.map(noteCard).join('');
 
+        /* Both bands are opened before anything is measured. They start
+           hidden in the markup, and a card inside a display:none subtree
+           measures a scrollHeight of 0 — which reads as "this note fits",
+           so on the first render after a reload every pinned and Finish
+           Next note came up unclamped, with no Expand control. Later
+           renders looked right only because a previous pass had already
+           opened the bands. applyNoteFilters settles the real visibility
+           below; this only has to hold while sizeCard reads. */
+        el('finish-wrap').hidden = finish.length === 0;
+        el('pinned-wrap').hidden = pinned.length === 0;
+
         /* Bodies are assigned, not interpolated into the markup. The HTML
            parser drops a leading newline inside <textarea>, so a note that
            opens with a blank line would lose it on every re-render — and
@@ -1026,6 +1037,13 @@
     function sizeCard(card) {
         const n = findNote(card.dataset.id);
         if (!n) return;
+
+        /* A card that is not laid out — in a band that is still closed, or
+           filtered out of the search — measures 0, and 0 never exceeds the
+           limit, so measuring it would quietly switch its clamp off. Leave
+           it as it is; whichever render puts it back on screen sizes it. */
+        if (card.offsetParent === null) return;
+
         const view = el('note-view').value || 'medium';
 
         /* List view hides the body, so there is nothing on screen to
