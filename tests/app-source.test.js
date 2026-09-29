@@ -482,6 +482,23 @@ test('the focus view has one place that decides which surface is showing', () =>
     assert.match(meta[1], /const body = note\.body \|\| ''/);
 });
 
+test('a note shows when it was created and last updated', () => {
+    /* Both stamps are recorded when the note is made. */
+    assert.match(app, /created: now, updated: now/);
+    const times = app.match(/function noteTimes\(n\) \{([\s\S]*?)\n    \}/);
+    assert.ok(times, 'noteTimes exists');
+    assert.match(times[1], /n\.created/);
+    assert.match(times[1], /n\.updated/);
+    /* The card carries the exact pair as a tooltip, and every path that
+       refreshes its stamp refreshes that too rather than only the text. */
+    assert.match(app, /class="note-stamp" title="\$\{esc\(noteTimes\(n\)\)\}"/);
+    assert.doesNotMatch(app, /querySelector\('\.note-stamp'\)\.textContent =/);
+    /* The focus view spells them out. */
+    assert.match(html, /id="focus-times"/);
+    const meta = app.match(/function updateFocusMeta\(\) \{([\s\S]*?)\n    \}/);
+    assert.match(meta[1], /el\('focus-times'\)\.textContent = noteTimes\(note\)/);
+});
+
 test('a rendered body is clamped and expanded like any other long note', () => {
     const sizeCard = app.match(/function sizeCard\(card\) \{([\s\S]*?)\n    \}/);
     assert.ok(sizeCard, 'sizeCard exists');

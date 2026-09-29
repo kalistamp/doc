@@ -1239,11 +1239,18 @@ a { color: var(--accent); }
     background: var(--surface-2);
     flex: none;
 }
+/* Counts over dates, stacked: side by side the pair crowded Copy and Done
+   off a phone-width footer. Each line shortens rather than wraps. */
+.focus-info {
+    display: flex; flex-direction: column; gap: .1rem;
+    min-width: 0;
+}
 .focus-meta {
     font-size: .78rem; color: var(--ink-faint);
     font-variant-numeric: tabular-nums;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.focus-times:empty { display: none; }
 
 /* ============================================================
    MARKDOWN

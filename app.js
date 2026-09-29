@@ -125,6 +125,32 @@
         return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
 
+    function fullTime(iso) {
+        const then = new Date(iso || '');
+        if (isNaN(then)) return '';
+        return then.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    }
+
+    /* Both stamps, exact. Notes written before `created` was recorded, or
+       imported from a backup without it, simply say nothing about it
+       rather than claim a date nobody wrote down. */
+    function noteTimes(n) {
+        return [
+            fullTime(n.created) && `Created ${fullTime(n.created)}`,
+            fullTime(n.updated) && `Updated ${fullTime(n.updated)}`
+        ].filter(Boolean).join(' · ');
+    }
+
+    /* The card footer has no room for two dates, so it keeps the short
+       relative stamp and carries the exact pair as its tooltip and label. */
+    function paintStamp(card, note) {
+        const stamp = card.querySelector('.note-stamp');
+        const times = noteTimes(note);
+        stamp.textContent = relTime(note.updated);
+        stamp.title = times;
+        stamp.setAttribute('aria-label', times || 'No date recorded');
+    }
+
     const TEXTY = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml)|$)/;
     const isTexty = (type, name) =>
         TEXTY.test(type || '') || /\.(txt|md|json|csv|log|ya?ml|xml|js|ts|css|html|sh|py)$/i.test(name);
@@ -915,7 +941,8 @@
                         <svg class="ico"><use href="#i-folder"></use></svg>
                         ${n.folder ? `<span>${esc(folderName(n.folder))}</span>` : ''}
                     </button>
-                    <span class="note-stamp">${esc(relTime(n.updated))}</span>
+                    <span class="note-stamp" title="${esc(noteTimes(n))}"
+                          aria-label="${esc(noteTimes(n) || 'No date recorded')}">${esc(relTime(n.updated))}</span>
                     ${isList(n) ? '' : `<button class="note-act act-md${markdown ? ' is-on' : ''}" type="button"
                             title="${markdown ? 'Show as plain text' : 'Preview as Markdown'}"
                             aria-pressed="${markdown ? 'true' : 'false'}"
@@ -1103,7 +1130,7 @@
     function touchNote(note, card) {
         note.updated = new Date().toISOString();
         if (card) {
-            card.querySelector('.note-stamp').textContent = relTime(note.updated);
+            paintStamp(card, note);
             refreshDerived(note, card);
         }
         durableNote(note);
@@ -1742,6 +1769,7 @@
             el('focus-meta').textContent =
                 `${lineCount(body).toLocaleString()} lines · ${words.toLocaleString()} words`;
         }
+        el('focus-times').textContent = noteTimes(note);
     }
 
     ['focus-title', 'focus-body'].forEach((id) => {
@@ -2124,6 +2152,7 @@
                 const bits = [];
                 if (n.folder) bits.push(`folder: ${folderName(n.folder)}`);
                 if (isList(n)) bits.push('checklist');
+                if (fullTime(n.created)) bits.push(`created ${new Date(n.created).toLocaleString()}`);
                 bits.push(`updated ${new Date(n.updated || Date.now()).toLocaleString()}`);
                 out.push(bits.join('   ·   '));
                 out.push('-'.repeat(60));
@@ -2372,7 +2401,7 @@
         if (el('panel-notes').contains(document.activeElement)) return;
         document.querySelectorAll('.note').forEach((card) => {
             const note = findNote(card.dataset.id);
-            if (note) card.querySelector('.note-stamp').textContent = relTime(note.updated);
+            if (note) paintStamp(card, note);
         });
     }, 60000);
 
